@@ -511,8 +511,10 @@ Return ONLY the JSON object, without any surrounding text or markdown formatting
     # Reorganize results by page
     ocr_by_page = {}
     for (page_idx, img_id), ocr_text in image_ocr_results.items():
-            ocr_by_page.setdefault(page_idx, {})[img_id] = ocr_text
-            print(f"  - Successfully processed page {page_idx+1}, image {i+1} with {structure_model}.")
+        ocr_by_page.setdefault(page_idx, {})[img_id] = ocr_text
+        print(
+            f"  - Successfully processed page {page_idx+1}, image {img_id} with {structure_model}."
+        )
     
     return ocr_by_page
 
@@ -783,8 +785,12 @@ def create_gradio_interface():
     
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
-        raise ValueError("❌ 未在 .env 找到 GEMINI_API_KEY，請確認已正確設置。")
-    gemini_client = genai.Client(api_key=gemini_api_key)
+        print(
+            "⚠️ 未在 .env 找到 GEMINI_API_KEY。若要使用 Gemini 模型，請設置此環境變數。"
+        )
+        gemini_client = None
+    else:
+        gemini_client = genai.Client(api_key=gemini_api_key)
 
     # Initialize OpenAI client if library is available
     openai_client = None
@@ -835,6 +841,17 @@ def create_gradio_interface():
              print("❌ 錯誤：未選擇輸出格式") # Console print
              yield "錯誤：未選擇輸出格式", log_accumulator
              return # Stop execution
+
+        # Ensure Gemini client exists if any Gemini model is selected
+        if (
+            (structure_model.startswith("gemini") or translation_model.startswith("gemini"))
+            and gemini_client is None
+        ):
+            error_msg = "未設定 GEMINI_API_KEY，無法使用 Gemini 模型"
+            log_accumulator += f"{error_msg}\n"
+            print(f"❌ 錯誤：{error_msg}")
+            yield f"錯誤：{error_msg}", log_accumulator
+            return
 
         pdf_path_obj = Path(pdf_file) # Use Path object for consistency
         filename_stem = pdf_path_obj.stem
