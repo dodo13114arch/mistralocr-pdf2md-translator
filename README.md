@@ -1,8 +1,6 @@
 # Mistral OCR 翻譯PDF轉Markdown格式工具
 
-[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/dodo13114arch/mistral-ocr-translator-demo)
-
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/dodo13114arch/mistralocr-pdf2md-translator)
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/dodo13114arch/mistral-ocr-translator-demo) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/dodo13114arch/mistralocr-pdf2md-translator)
 
 **[點此試用線上 Demo (Hugging Face Spaces)](https://huggingface.co/spaces/dodo13114arch/mistral-ocr-translator-demo)** 
 
@@ -15,6 +13,8 @@
 3. 使用 **Gemini** 或 **OpenAI** 模型將英文內容翻譯為**台灣繁體中文** (或其他語言，透過修改提示詞)。
 4. 使用 **Pixtral**, **Gemini**, 或 **OpenAI** 模型對圖片中的內容進行結構化 OCR (可選)。
 5. 匯出 Markdown 檔（原文版 + 翻譯版）與對應圖片。
+
+⚠ 注意： 本專案依賴於 httpx 和 uvicorn，這些套件目前尚未支援 h11 版本 0.16.0 或以上。雖然 h11 在 0.16.0 版本中修復了已知的安全性漏洞（CVE-2025-43859），但目前的依賴組合可能仍使用較舊的 h11 版本。使用者可自行調整依賴版本，但需自行承擔可能的風險。
 
 ## 安裝需求
 
