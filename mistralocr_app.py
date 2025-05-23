@@ -1015,11 +1015,11 @@ def create_gradio_interface():
                     structure_model = gr.Dropdown(
                         label="結構化模型 (用於圖片 OCR)", 
                         choices=[
-                            ("pixtral-12b-latest (Recommend)", "pixtral-12b-latest"),
-                            ("gemini-2.0-flash (Recommend)", "gemini-2.0-flash"),
+                            ("pixtral-12b-latest (Recommended)", "pixtral-12b-latest"),
+                            ("gemini-2.0-flash (Recommended)", "gemini-2.0-flash"),
                             ("gpt-4o-mini", "gpt-4o-mini"),
                             ("gpt-4o", "gpt-4o"),
-                            ("gpt-4.1-nano (Not Recommend)", "gpt-4.1-nano"),
+                            ("gpt-4.1-nano (Not Recommended)", "gpt-4.1-nano"),
                             ("gpt-4.1-mini", "gpt-4.1-mini"),
                             ("gpt-4.1", "gpt-4.1")
                         ], 
@@ -1034,12 +1034,12 @@ def create_gradio_interface():
                     translation_model = gr.Dropdown(
                         label="翻譯模型", 
                         choices=[
-                            ("gemini-2.0-flash (Recommend)", "gemini-2.0-flash"), 
+                            ("gemini-2.0-flash (Recommended)", "gemini-2.0-flash"), 
                             ("gemini-2.5-pro-exp-03-25", "gemini-2.5-pro-exp-03-25"), 
                             ("gemini-2.0-flash-lite", "gemini-2.0-flash-lite"),
                             ("gpt-4o", "gpt-4o"), 
                             ("gpt-4o-mini", "gpt-4o-mini"),
-                            ("gpt-4.1-nano (Not Recommend)", "gpt-4.1-nano"),
+                            ("gpt-4.1-nano (Not Recommended)", "gpt-4.1-nano"),
                             ("gpt-4.1-mini", "gpt-4.1-mini"),
                             ("gpt-4.1", "gpt-4.1")
                         ], 
