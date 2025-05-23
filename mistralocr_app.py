@@ -1017,6 +1017,7 @@ def create_gradio_interface():
                         choices=[
                             ("pixtral-12b-latest (Recommended)", "pixtral-12b-latest"),
                             ("gemini-2.0-flash (Recommended)", "gemini-2.0-flash"),
+                            ("gemini-2.5-flash-preview-05-20", "gemini-2.5-flash-preview-05-20"),
                             ("gpt-4o-mini", "gpt-4o-mini"),
                             ("gpt-4o", "gpt-4o"),
                             ("gpt-4.1-nano (Not Recommended)", "gpt-4.1-nano"),
@@ -1034,11 +1035,16 @@ def create_gradio_interface():
                     translation_model = gr.Dropdown(
                         label="翻譯模型", 
                         choices=[
+                            ("gemini-2.0-flash (Recommended)", "gemini-2.0-flash"),
+                            ("gemini-2.5-flash-preview-05-20", "gemini-2.5-flash-preview-05-20"),
+                            ("gemini-2.5-pro-exp-03-25", "gemini-2.5-pro-exp-03-25"),
+                            ("gemini-2.0-flash-lite", "gemini-2.0-flash-lite"),
                             ("gemini-2.0-flash (Recommended)", "gemini-2.0-flash"), 
                             ("gemini-2.5-pro-exp-03-25", "gemini-2.5-pro-exp-03-25"), 
                             ("gemini-2.0-flash-lite", "gemini-2.0-flash-lite"),
                             ("gpt-4o", "gpt-4o"), 
                             ("gpt-4o-mini", "gpt-4o-mini"),
+                            ("o4-mini-2025-04-16", "o4-mini-2025-04-16"),
                             ("gpt-4.1-nano (Not Recommended)", "gpt-4.1-nano"),
                             ("gpt-4.1-mini", "gpt-4.1-mini"),
                             ("gpt-4.1", "gpt-4.1")
