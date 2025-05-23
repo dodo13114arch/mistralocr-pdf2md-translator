@@ -21,14 +21,12 @@ import os
 import json
 import base64
 import time
-import tempfile
 from pathlib import Path
 import pickle
 import certifi
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
 # Third-party libraries
-from IPython.display import Markdown, display
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import gradio as gr
@@ -277,13 +275,13 @@ def process_images_with_ocr(pdf_response, mistral_client, gemini_client, openai_
                     model="mistral-ocr-latest" # Use the dedicated OCR model here
                 )
                 image_ocr_markdown = image_response.pages[0].markdown
-                print(f"  - Basic OCR text extracted.")
+                print("  - Basic OCR text extracted.")
 
                 # Step 2: Structure the OCR markdown using the selected model
                 print(f"  - Structuring OCR using: {structure_model}")
                 if structure_model == "pixtral-12b-latest":
-                    print(f"    - Using Mistral Pixtral...")
-                    print(f"    - Sending request to Pixtral API...") # Added print statement
+                    print("    - Using Mistral Pixtral...")
+                    print("    - Sending request to Pixtral API...") # Added print statement
                     structured = mistral_client.chat.parse(
                         model=structure_model, # Use the selected structure_model
                         messages=[
@@ -584,7 +582,8 @@ def process_pdf_to_markdown(
     load_msg = None
     if use_existing_checkpoints:
         pdf_response, load_msg = load_checkpoint(pdf_ocr_checkpoint) # Get message
-        if load_msg: yield load_msg # Yield message
+        if load_msg:
+            yield load_msg
 
     if pdf_response is None:
         msg = "🔍 正在處理 PDF OCR..."
@@ -592,7 +591,8 @@ def process_pdf_to_markdown(
         print(msg) # Console print
         pdf_response = process_pdf_with_mistral_ocr(pdf_path, mistral_client, model=ocr_model)
         save_msg = save_checkpoint(pdf_response, pdf_ocr_checkpoint) # save_checkpoint already prints
-        if save_msg: yield save_msg # Yield message
+        if save_msg:
+            yield save_msg
     else:
         print("ℹ️ 使用現有 PDF OCR 檢查點。")
 
@@ -602,7 +602,8 @@ def process_pdf_to_markdown(
         load_msg = None
         if use_existing_checkpoints:
             ocr_by_page, load_msg = load_checkpoint(image_ocr_checkpoint) # Get message
-            if load_msg: yield load_msg # Yield message
+            if load_msg:
+                yield load_msg
 
         if ocr_by_page is None or not ocr_by_page: # Check if empty dict from checkpoint or explicitly empty
             msg = f"🖼️ 正在使用 '{structure_model}' 處理圖片 OCR 與結構化..."
@@ -618,7 +619,8 @@ def process_pdf_to_markdown(
                 structure_text_only=structure_text_only # Pass the text-only flag
             )
             save_msg = save_checkpoint(ocr_by_page, image_ocr_checkpoint) # save_checkpoint already prints
-            if save_msg: yield save_msg # Yield message
+            if save_msg:
+                yield save_msg
         else:
             print("ℹ️ 使用現有圖片 OCR 檢查點。")
     else:
@@ -630,7 +632,8 @@ def process_pdf_to_markdown(
     if use_existing_checkpoints:
         # Try loading the raw page data checkpoint
         raw_page_data, load_msg = load_checkpoint(raw_page_data_checkpoint)
-        if load_msg: yield load_msg
+        if load_msg:
+            yield load_msg
 
     if raw_page_data is None:
         msg = "📝 正在建立原始頁面資料 (Markdown + 圖片資訊)..."
@@ -644,7 +647,8 @@ def process_pdf_to_markdown(
 
         # Save the RAW page data checkpoint
         save_msg = save_checkpoint(raw_page_data, raw_page_data_checkpoint)
-        if save_msg: yield save_msg
+        if save_msg:
+            yield save_msg
     else:
         print("ℹ️ 使用現有原始頁面資料檢查點。")
 
@@ -919,7 +923,7 @@ def create_gradio_interface():
             if result_data:
                 final_log_message = "✅ 處理完成！"
                 log_accumulator += f"{final_log_message}\n"
-                print(f"--- Gradio 處理請求完成 ---") # Console print
+                print("--- Gradio 處理請求完成 ---") # Console print
 
                 # Determine final_result_content based on selections in result_data
                 selected_formats = result_data.get("output_formats_selected", [])
