@@ -87,13 +87,14 @@ def get_combined_markdown(ocr_response: OCRResponse) -> str:
         markdowns.append(replace_images_in_markdown(page.markdown, image_data))
     return "\n\n".join(markdowns)
 
-def insert_ocr_below_images(markdown_str, ocr_img_map, page_idx):
+def insert_ocr_below_images(markdown_str, ocr_img_map, page_idx, description_style="json"):
     """Insert OCR results below images in markdown."""
     for img_id, ocr_text in ocr_img_map.get(page_idx, {}).items():
-        markdown_str = markdown_str.replace(
-            f"![{img_id}]({img_id})",
-            f"![{img_id}]({img_id})\n\n> 📄 Image OCR Result：\n\n```json\n{ocr_text}\n```"
-        )
+        if description_style == "plain":
+            insertion = f"![{img_id}]({img_id})\n\n> 📄 Image OCR Text：\n\n{ocr_text}"
+        else:
+            insertion = f"![{img_id}]({img_id})\n\n> 📄 Image OCR Result：\n\n```json\n{ocr_text}\n```"
+        markdown_str = markdown_str.replace(f"![{img_id}]({img_id})", insertion)
     return markdown_str
 
 def save_images_and_replace_links(markdown_str, images_dict, page_idx, image_folder="images"):
@@ -134,6 +135,17 @@ DEFAULT_TRANSLATION_SYSTEM_INSTRUCTION = """
 3.  **處理專有名詞：** 對於普遍接受的英文技術術語、縮寫或專有名詞（例如 API, SDK, CPU, Google, Python 等），傾向於**保留英文原文**。但請確保翻譯了其他所有非術語的常規英文文字。
 4.  **直接輸出結果：** 請直接回傳翻譯後的完整 Markdown 文件，不要添加任何額外說明。
 """
+
+# Additional translation styles
+RESEARCH_NOTE_PROMPT = """
+你是一位研究助理，請以較口語、摘要的筆記風格翻譯以下英文 Markdown 內容為台灣繁體中文。
+保持所有 Markdown 標記與程式碼區塊不變，允許適度精簡但勿遺漏重要資訊。
+"""
+
+TRANSLATION_STYLE_PROMPTS = {
+    "研究筆記": RESEARCH_NOTE_PROMPT,
+    "正式出版": DEFAULT_TRANSLATION_SYSTEM_INSTRUCTION,
+}
 
 # Updated signature to accept openai_client
 def translate_markdown_pages(pages, gemini_client, openai_client, model="gemini-2.0-flash", system_instruction=None):
@@ -245,7 +257,15 @@ def process_pdf_with_mistral_ocr(pdf_path, client, model="mistral-ocr-latest"):
     return pdf_response
 
 # Updated function signature to include structure_text_only
-def process_images_with_ocr(pdf_response, mistral_client, gemini_client, openai_client, structure_model="pixtral-12b-latest", structure_text_only=False):
+def process_images_with_ocr(
+    pdf_response,
+    mistral_client,
+    gemini_client,
+    openai_client,
+    structure_model="pixtral-12b-latest",
+    structure_text_only=False,
+    description_style="json",
+):
     """Process images from PDF pages with OCR and structure using the specified model."""
     image_ocr_results = {}
     
@@ -272,10 +292,13 @@ def process_images_with_ocr(pdf_response, mistral_client, gemini_client, openai_
                 print(f"  - Performing basic OCR on page {page_idx+1}, image {i+1}...")
                 image_response = mistral_client.ocr.process(
                     document=ImageURLChunk(image_url=base64_data_url),
-                    model="mistral-ocr-latest" # Use the dedicated OCR model here
+                    model="mistral-ocr-latest"  # Use the dedicated OCR model here
                 )
                 image_ocr_markdown = image_response.pages[0].markdown
                 print("  - Basic OCR text extracted.")
+
+                if description_style == "plain":
+                    return image_ocr_markdown
 
                 # Step 2: Structure the OCR markdown using the selected model
                 print(f"  - Structuring OCR using: {structure_model}")
@@ -542,13 +565,15 @@ def load_checkpoint(filename, console_output=None):
 
 # Updated function signature to include structure_text_only
 def process_pdf_to_markdown(
-    pdf_path, 
-    mistral_client, 
+    pdf_path,
+    mistral_client,
     gemini_client,
-    openai_client, 
+    openai_client,
     ocr_model="mistral-ocr-latest",
     structure_model="pixtral-12b-latest",
     structure_text_only=False, # Added structure_text_only
+    image_description_style="json",
+    ocr_only=False,
     translation_model="gemini-2.0-flash",
     translation_system_prompt=None,
     process_images=True,
@@ -611,12 +636,13 @@ def process_pdf_to_markdown(
             print(msg) # Console print
             # Pass gemini_client and correct structure_model parameter name
             ocr_by_page = process_images_with_ocr(
-                pdf_response, 
-                mistral_client, 
-                gemini_client, 
-                openai_client, 
+                pdf_response,
+                mistral_client,
+                gemini_client,
+                openai_client,
                 structure_model=structure_model,
-                structure_text_only=structure_text_only # Pass the text-only flag
+                structure_text_only=structure_text_only,  # Pass the text-only flag
+                description_style=image_description_style,
             )
             save_msg = save_checkpoint(ocr_by_page, image_ocr_checkpoint) # save_checkpoint already prints
             if save_msg:
@@ -660,7 +686,12 @@ def process_pdf_to_markdown(
         print(msg)
         for page_idx, (raw_md, _) in enumerate(raw_page_data): # Iterate through raw data
             # Insert OCR results into the raw markdown text BEFORE replacing links
-            md_with_ocr = insert_ocr_below_images(raw_md, ocr_by_page, page_idx)
+            md_with_ocr = insert_ocr_below_images(
+                raw_md,
+                ocr_by_page,
+                page_idx,
+                description_style=image_description_style,
+            )
             pages_after_ocr_insertion.append(md_with_ocr)
     else:
         # If not inserting OCR, just use the raw markdown text
@@ -811,10 +842,12 @@ def create_gradio_interface():
         translation_model,
         translation_system_prompt,
         process_images,
-        output_formats_selected, 
+        output_formats_selected,
         output_dir,
         use_existing_checkpoints,
-        structure_text_only # Added new parameter from Gradio input
+        structure_text_only,  # Added new parameter from Gradio input
+        ocr_only,
+        image_description_style,
     ):
         # Accumulate logs for console output
         log_accumulator = ""
@@ -878,9 +911,13 @@ def create_gradio_interface():
 
         # Determine if translation is needed based on CheckboxGroup selection
         # The 'translate' checkbox is now less relevant, primary control is output_formats_selected
-        need_translation_for_processing = "中文翻譯" in output_formats_selected
+        if ocr_only:
+            output_formats_selected = ["英文原文"]
+        need_translation_for_processing = ("中文翻譯" in output_formats_selected) and not ocr_only
         log_accumulator += "✅ 將產生中文翻譯\n" if need_translation_for_processing else "ℹ️ 不產生中文翻譯 (未勾選)\n"
         yield gr.update(), log_accumulator # Update only console
+
+        image_description_style = "plain" if image_description_style == "純文字" else "json"
         log_accumulator += "✅ 使用現有檢查點（如果存在）\n" if use_existing_checkpoints else "🔄 重新處理所有步驟（不使用現有檢查點）\n"
         yield gr.update(), log_accumulator # Update only console
         print(f"需要翻譯: {need_translation_for_processing}, 使用檢查點: {use_existing_checkpoints}") # Console print
@@ -889,18 +926,19 @@ def create_gradio_interface():
         try:
             # process_pdf_to_markdown is a generator, iterate through its yields
             processor = process_pdf_to_markdown(
-                pdf_path=pdf_file, # Pass the file path/object directly
+                pdf_path=pdf_file,  # Pass the file path/object directly
                 mistral_client=mistral_client,
                 gemini_client=gemini_client,
-                openai_client=openai_client, 
+                openai_client=openai_client,
                 ocr_model=ocr_model,
                 structure_model=structure_model,
-                structure_text_only=structure_text_only, # Pass text-only flag
+                structure_text_only=structure_text_only,  # Pass text-only flag
+                image_description_style=image_description_style,
+                ocr_only=ocr_only,
                 translation_model=translation_model,
                 translation_system_prompt=translation_system_prompt if translation_system_prompt.strip() else None,
                 process_images=process_images,
-                # Removed duplicate process_images argument below
-                output_formats_selected=output_formats_selected, # Pass selected formats
+                output_formats_selected=output_formats_selected,  # Pass selected formats
                 output_dir=output_dir,
                 checkpoint_dir=checkpoint_dir,
                 use_existing_checkpoints=use_existing_checkpoints
@@ -993,9 +1031,22 @@ def create_gradio_interface():
 
                 with gr.Accordion("處理選項", open=True):
                     process_images = gr.Checkbox(
-                        label="處理圖片 OCR", 
+                        label="處理圖片 OCR",
                         value=True,
                         info="啟用後，將對 PDF 中的圖片進行 OCR 辨識"
+                    )
+
+                    ocr_only = gr.Checkbox(
+                        label="僅執行 OCR (不翻譯)",
+                        value=False,
+                        info="啟用後僅輸出英文原文，完全跳過翻譯步驟。"
+                    )
+
+                    image_description_style = gr.Dropdown(
+                        label="圖片 OCR 內容格式",
+                        choices=["結構化 JSON", "純文字"],
+                        value="結構化 JSON",
+                        info="選擇插入圖片 OCR 結果的格式"
                     )
                     
                     # The 'translate' checkbox is now redundant as format selection controls translation
@@ -1053,10 +1104,21 @@ def create_gradio_interface():
                         info="選擇用於翻譯的模型。選擇 Gemini 或 OpenAI 模型需要對應的 API Key 在 .env 檔案中設定。"
                     )
                 with gr.Accordion("進階設定", open=False):
+                    translation_style = gr.Dropdown(
+                        label="翻譯模式",
+                        choices=["研究筆記", "正式出版"],
+                        value="正式出版",
+                        info="選擇翻譯語氣與詳盡程度"
+                    )
                     translation_system_prompt = gr.Textbox(
-                        label="翻譯系統提示詞", 
+                        label="翻譯系統提示詞",
                         value=DEFAULT_TRANSLATION_SYSTEM_INSTRUCTION,
                         lines=10
+                    )
+                    translation_style.change(
+                        lambda m: TRANSLATION_STYLE_PROMPTS.get(m, DEFAULT_TRANSLATION_SYSTEM_INSTRUCTION),
+                        inputs=translation_style,
+                        outputs=translation_system_prompt,
                     )
                 
                 process_button = gr.Button("開始處理", variant="primary")
@@ -1138,7 +1200,9 @@ def create_gradio_interface():
             output_format, # Now CheckboxGroup list
             output_dir,
             use_existing_checkpoints,
-            structure_text_only # Added new checkbox input
+            structure_text_only,  # Added new checkbox input
+            ocr_only,
+            image_description_style,
         ]
 
         # Use process_button.click with the generator function
