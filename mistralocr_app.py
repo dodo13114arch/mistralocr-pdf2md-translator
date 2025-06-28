@@ -1102,6 +1102,7 @@ def create_gradio_interface():
                             ("pixtral-12b-latest (Recommended)", "pixtral-12b-latest"),
                             ("gemini-2.0-flash (Recommended)", "gemini-2.0-flash"),
                             ("gemini-2.5-flash-preview-05-20", "gemini-2.5-flash-preview-05-20"),
+                            ("gemini-2.5-flash", "gemini-2.5-flash"),
                             ("gpt-4o-mini", "gpt-4o-mini"),
                             ("gpt-4o", "gpt-4o"),
                             ("gpt-4.1-nano (Not Recommended)", "gpt-4.1-nano"),
@@ -1121,6 +1122,7 @@ def create_gradio_interface():
                         choices=[
                             ("gemini-2.0-flash (Recommended)", "gemini-2.0-flash"),
                             ("gemini-2.5-flash-preview-05-20", "gemini-2.5-flash-preview-05-20"),
+                            ("gemini-2.5-flash", "gemini-2.5-flash"),
                             ("gemini-2.5-pro-exp-03-25", "gemini-2.5-pro-exp-03-25"),
                             ("gemini-2.0-flash-lite", "gemini-2.0-flash-lite"),
                             ("gpt-4o", "gpt-4o"), 
