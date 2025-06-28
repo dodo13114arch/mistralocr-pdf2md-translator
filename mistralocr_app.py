@@ -142,9 +142,24 @@ RESEARCH_NOTE_PROMPT = """
 保持所有 Markdown 標記與程式碼區塊不變，允許適度精簡但勿遺漏重要資訊。
 """
 
+# 新增：建築專業翻譯提示詞
+ARCHITECTURE_TRANSLATION_PROMPT = """
+你是一位熟悉建築設計與理論的專業翻譯者。請將我提供的英文 Markdown 內容完整翻譯為台灣繁體中文，並精確傳達建築相關術語與概念。
+
+**核心要求：**
+1. **翻譯所有英文文字：** 包含段落、列表、表格等敘述性內容。
+2. **保持結構與程式碼不變：**
+   * **不要**更改任何 Markdown 標記（如 `#`, `*`, `-`, `[]()`, `![]()`, ``` ``` , ` `` `, `---`）。
+   * **不要**翻譯或修改程式碼區塊 (``` ... ```) 和行內程式碼 (`code`) 內容。
+   * 若有 JSON，**不要**更改鍵（key），僅翻譯字串值（value）。
+3. **處理專有名詞：** 對於建築術語、歷史人物或建築物名稱等，可依常用譯名翻譯，必要時保留原文並附中文解釋。
+4. **直接輸出結果：** 請直接回傳翻譯後的完整 Markdown 文件，不要添加任何額外說明。
+"""
+
 TRANSLATION_STYLE_PROMPTS = {
     "研究筆記": RESEARCH_NOTE_PROMPT,
-    "正式出版": DEFAULT_TRANSLATION_SYSTEM_INSTRUCTION,
+    "技術論文翻譯": DEFAULT_TRANSLATION_SYSTEM_INSTRUCTION,
+    "建築專業翻譯": ARCHITECTURE_TRANSLATION_PROMPT,
 }
 
 # Updated signature to accept openai_client
@@ -1124,8 +1139,8 @@ def create_gradio_interface():
                 with gr.Accordion("進階設定", open=False):
                     translation_style = gr.Dropdown(
                         label="翻譯模式",
-                        choices=["研究筆記", "正式出版"],
-                        value="正式出版",
+                        choices=["研究筆記", "技術論文翻譯", "建築專業翻譯"],
+                        value="技術論文翻譯",
                         info="選擇翻譯語氣與詳盡程度"
                     )
                     translation_system_prompt = gr.Textbox(
