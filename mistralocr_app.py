@@ -29,6 +29,7 @@ os.environ["SSL_CERT_FILE"] = certifi.where()
 # Third-party libraries
 from pydantic import BaseModel
 from dotenv import load_dotenv
+load_dotenv(override=True)
 import gradio as gr
 
 # Mistral AI
@@ -144,16 +145,14 @@ RESEARCH_NOTE_PROMPT = """
 
 # 新增：建築專業翻譯提示詞
 ARCHITECTURE_TRANSLATION_PROMPT = """
-你是一位熟悉建築設計與理論的專業翻譯者。請將我提供的英文 Markdown 內容完整翻譯為台灣繁體中文，並精確傳達建築相關術語與概念。
+你是一位熟悉建築與文化理論的學術譯者，目標是產出可供學術閱讀與引用的翻譯版本。請將以下英文 Markdown 內容翻譯為台灣繁體中文，並：
 
-**核心要求：**
-1. **翻譯所有英文文字：** 包含段落、列表、表格等敘述性內容。
-2. **保持結構與程式碼不變：**
-   * **不要**更改任何 Markdown 標記（如 `#`, `*`, `-`, `[]()`, `![]()`, ``` ``` , ` `` `, `---`）。
-   * **不要**翻譯或修改程式碼區塊 (``` ... ```) 和行內程式碼 (`code`) 內容。
-   * 若有 JSON，**不要**更改鍵（key），僅翻譯字串值（value）。
-3. **處理專有名詞：** 對於建築術語、歷史人物或建築物名稱等，可依常用譯名翻譯，必要時保留原文並附中文解釋。
-4. **直接輸出結果：** 請直接回傳翻譯後的完整 Markdown 文件，不要添加任何額外說明。
+1. **對所有重要術語、人名、專有詞，於首次出現時標註英文原文**（使用括號）。
+2. 如該術語重複出現，僅保留首次註解後不再重複。
+3. 中文語法應忠實於原文結構，保留論述邏輯與原句層次。
+4. 保持所有 Markdown 標記與原始程式碼區塊不變。
+
+請直接輸出翻譯，不需添加任何額外說明。
 """
 
 TRANSLATION_STYLE_PROMPTS = {
