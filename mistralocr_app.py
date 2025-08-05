@@ -31,6 +31,8 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 load_dotenv(override=True)
 import gradio as gr
+# Disable Gradio flagging to avoid DoS vectors
+os.environ.setdefault("GRADIO_ALLOW_FLAGGING", "never")
 
 # Mistral AI
 from mistralai import Mistral
@@ -1271,4 +1273,10 @@ def create_gradio_interface():
 if __name__ == "__main__":
     # Create and launch Gradio interface
     demo = create_gradio_interface()
-    demo.launch()
+
+    # Optional basic authentication via environment variables
+    username = os.getenv("GRADIO_USERNAME")
+    password = os.getenv("GRADIO_PASSWORD")
+    auth = (username, password) if username and password else None
+
+    demo.launch(debug=False, auth=auth)
