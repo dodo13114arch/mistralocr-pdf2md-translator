@@ -24,6 +24,8 @@ import time
 from pathlib import Path
 import pickle
 import certifi
+import tempfile
+import shutil
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
 # Third-party libraries
@@ -48,6 +50,14 @@ except ImportError:
     print("⚠️ OpenAI library not found. Please install it: pip install openai")
     OpenAI = None # Set to None if import fails
 
+# PDF processing
+try:
+    from PyPDF2 import PdfReader, PdfWriter
+except ImportError:
+    print("⚠️ PyPDF2 library not found. Please install it: pip install pypdf2")
+    PdfReader = None
+    PdfWriter = None
+
 # ===== Pydantic Models =====
 
 class StructuredOCR(BaseModel):
@@ -71,6 +81,67 @@ def retry_with_backoff(func, retries=5, base_delay=1.5):
             else:
                 raise e
     raise RuntimeError("❌ Failed after multiple retries.")
+
+def get_pdf_page_count(pdf_path):
+    """Get the total number of pages in a PDF file."""
+    if not PdfReader:
+        raise ImportError("PyPDF2 not available for PDF page counting")
+    
+    try:
+        with open(pdf_path, 'rb') as file:
+            pdf_reader = PdfReader(file)
+            return len(pdf_reader.pages)
+    except Exception as e:
+        print(f"⚠️ Error reading PDF page count: {e}")
+        return 0
+
+def split_pdf_by_pages(pdf_path, output_dir, pages_per_chunk=30):
+    """Split a PDF into multiple smaller PDFs with specified pages per chunk."""
+    if not PdfReader or not PdfWriter:
+        raise ImportError("PyPDF2 not available for PDF splitting")
+    
+    pdf_file = Path(pdf_path)
+    filename_stem = pdf_file.stem.replace(" ", "_")  # Sanitize filename
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    chunk_files = []
+    
+    try:
+        with open(pdf_path, 'rb') as file:
+            pdf_reader = PdfReader(file)
+            total_pages = len(pdf_reader.pages)
+            
+            for chunk_start in range(0, total_pages, pages_per_chunk):
+                chunk_end = min(chunk_start + pages_per_chunk, total_pages)
+                
+                # Create new PDF writer for this chunk
+                pdf_writer = PdfWriter()
+                
+                # Add pages to this chunk
+                for page_num in range(chunk_start, chunk_end):
+                    pdf_writer.add_page(pdf_reader.pages[page_num])
+                
+                # Write chunk to file
+                chunk_filename = f"{filename_stem}_chunk_{chunk_start+1}to{chunk_end}.pdf"
+                chunk_path = os.path.join(output_dir, chunk_filename)
+                
+                with open(chunk_path, 'wb') as output_file:
+                    pdf_writer.write(output_file)
+                
+                chunk_files.append({
+                    'path': chunk_path,
+                    'start_page': chunk_start + 1,  # 1-based indexing for display
+                    'end_page': chunk_end,
+                    'pages_in_chunk': chunk_end - chunk_start
+                })
+    
+    except Exception as e:
+        print(f"❌ Error splitting PDF: {e}")
+        raise
+    
+    return chunk_files, total_pages
 
 def replace_images_in_markdown(markdown_str: str, images_dict: dict) -> str:
     """Replace image placeholders in markdown with base64-encoded images."""
@@ -170,9 +241,14 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
 
     # No longer collecting in a list here, will yield pages directly
     total_pages = len(pages) # Get total pages for progress
+    
+    # Initial progress message
+    yield f"📝 開始翻譯，共 {total_pages} 頁需要處理"
 
     for idx, page in enumerate(pages):
-        progress_message = f"🔁 正在翻譯第 {idx+1} / {total_pages} 頁..."
+        # Calculate progress percentage
+        progress_percent = int((idx / total_pages) * 100)
+        progress_message = f"翻譯進度: {progress_percent}% - 正在翻譯第 {idx+1}/{total_pages} 頁..."
         print(progress_message) # Print to console
         yield progress_message # Yield progress string for Gradio log
 
@@ -260,15 +336,15 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
             # Yield error marker instead of translated content
             yield f"--- ERROR: Translation Failed for Page {idx+1} ---\n\n{page}"
 
-    final_message = f"✅ 翻譯完成 {total_pages} 頁。"
+    final_message = f"翻譯進度: 100% - 所有頁面翻譯完成 ({total_pages} 頁)"
     yield final_message # Yield final translation status string
     print(final_message) # Print final translation status
     # No return needed for a generator yielding results
 
 # ===== PDF Processing Functions =====
 
-def process_pdf_with_mistral_ocr(pdf_path, client, model="mistral-ocr-latest"):
-    """Process PDF with Mistral OCR."""
+def process_single_pdf_chunk(pdf_path, client, model="mistral-ocr-latest"):
+    """Process a single PDF chunk with Mistral OCR."""
     pdf_file = Path(pdf_path)
     
     # Upload to mistral
@@ -291,6 +367,190 @@ def process_pdf_with_mistral_ocr(pdf_path, client, model="mistral-ocr-latest"):
     
     return pdf_response
 
+def process_pdf_with_mistral_ocr(pdf_path, client, model="mistral-ocr-latest", max_pages_per_chunk=30, progress_callback=None, temp_dir=None):
+    """Process PDF with Mistral OCR, automatically splitting large PDFs and showing progress."""
+    pdf_file = Path(pdf_path)
+    
+    # Create temporary directory if not provided
+    if temp_dir is None:
+        temp_dir = tempfile.mkdtemp(prefix="mistral_ocr_")
+        cleanup_temp = True
+    else:
+        cleanup_temp = False
+    
+    try:
+        # Check PDF page count
+        if progress_callback:
+            progress_callback("📄 正在檢查PDF頁數...")
+        
+        total_pages = get_pdf_page_count(pdf_path)
+        if total_pages == 0:
+            raise ValueError("無法讀取PDF或PDF為空")
+        
+        if progress_callback:
+            progress_callback(f"📊 PDF共有 {total_pages} 頁")
+        
+        # Decide whether to split the PDF
+        if total_pages <= max_pages_per_chunk:
+            # Process directly without splitting
+            if progress_callback:
+                progress_callback("🔄 PDF頁數不多，直接處理...")
+                progress_callback("PDF OCR 進度: 100%")
+            
+            return process_single_pdf_chunk(pdf_path, client, model)
+        
+        else:
+            # Split and process in chunks
+            if progress_callback:
+                progress_callback(f"✂️ PDF頁數較多 ({total_pages}頁)，將分成多個批次處理 (每批最多{max_pages_per_chunk}頁)")
+            
+            # Split PDF into chunks
+            chunks_dir = os.path.join(temp_dir, "pdf_chunks")
+            chunk_files, _ = split_pdf_by_pages(pdf_path, chunks_dir, max_pages_per_chunk)
+            
+            if progress_callback:
+                progress_callback(f"📂 已分割為 {len(chunk_files)} 個檔案")
+            
+            # Process each chunk and collect results
+            all_pages = []
+            total_chunks = len(chunk_files)
+            
+            for i, chunk_info in enumerate(chunk_files):
+                chunk_path = chunk_info['path']
+                start_page = chunk_info['start_page']
+                end_page = chunk_info['end_page']
+                
+                # Update progress
+                progress_percent = int((i / total_chunks) * 100)
+                if progress_callback:
+                    progress_callback(f"PDF OCR 進度: {progress_percent}% - 正在處理第 {start_page}-{end_page} 頁...")
+                
+                # Process this chunk
+                try:
+                    chunk_response = process_single_pdf_chunk(chunk_path, client, model)
+                    
+                    # Add pages from this chunk to the main collection
+                    # We need to adjust page numbers to maintain correct ordering
+                    for page in chunk_response.pages:
+                        all_pages.append(page)
+                    
+                    if progress_callback:
+                        progress_callback(f"✅ 完成第 {start_page}-{end_page} 頁")
+                
+                except Exception as e:
+                    error_msg = f"❌ 處理第 {start_page}-{end_page} 頁時發生錯誤: {e}"
+                    if progress_callback:
+                        progress_callback(error_msg)
+                    raise RuntimeError(error_msg)
+            
+            # Final progress update
+            if progress_callback:
+                progress_callback("PDF OCR 進度: 100% - 所有頁面處理完成")
+            
+            # Create a combined response object
+            # We need to mimic the structure of the original OCRResponse
+            # For simplicity, we'll create a basic object with the pages
+            class CombinedOCRResponse:
+                def __init__(self, pages):
+                    self.pages = pages
+            
+            return CombinedOCRResponse(all_pages)
+    
+    finally:
+        # Clean up temporary directory if we created it
+        if cleanup_temp and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception as e:
+                print(f"⚠️ 無法清理臨時目錄 {temp_dir}: {e}")
+
+def process_pdf_with_mistral_ocr_generator(pdf_path, client, model="mistral-ocr-latest", max_pages_per_chunk=30, temp_dir=None):
+    """Generator version of process_pdf_with_mistral_ocr that yields progress messages and final result."""
+    pdf_file = Path(pdf_path)
+    
+    # Create temporary directory if not provided
+    if temp_dir is None:
+        temp_dir = tempfile.mkdtemp(prefix="mistral_ocr_")
+        cleanup_temp = True
+    else:
+        cleanup_temp = False
+    
+    try:
+        # Check PDF page count
+        yield "📄 正在檢查PDF頁數..."
+        
+        total_pages = get_pdf_page_count(pdf_path)
+        if total_pages == 0:
+            raise ValueError("無法讀取PDF或PDF為空")
+        
+        yield f"📊 PDF共有 {total_pages} 頁"
+        
+        # Decide whether to split the PDF
+        if total_pages <= max_pages_per_chunk:
+            # Process directly without splitting
+            yield "🔄 PDF頁數不多，直接處理..."
+            yield "PDF OCR 進度: 100%"
+            
+            result = process_single_pdf_chunk(pdf_path, client, model)
+            yield result  # Yield the final result
+        
+        else:
+            # Split and process in chunks
+            yield f"✂️ PDF頁數較多 ({total_pages}頁)，將分成多個批次處理 (每批最多{max_pages_per_chunk}頁)"
+            
+            # Split PDF into chunks
+            chunks_dir = os.path.join(temp_dir, "pdf_chunks")
+            chunk_files, _ = split_pdf_by_pages(pdf_path, chunks_dir, max_pages_per_chunk)
+            
+            yield f"📂 已分割為 {len(chunk_files)} 個檔案"
+            
+            # Process each chunk and collect results
+            all_pages = []
+            total_chunks = len(chunk_files)
+            
+            for i, chunk_info in enumerate(chunk_files):
+                chunk_path = chunk_info['path']
+                start_page = chunk_info['start_page']
+                end_page = chunk_info['end_page']
+                
+                # Update progress
+                progress_percent = int((i / total_chunks) * 100)
+                yield f"PDF OCR 進度: {progress_percent}% - 正在處理第 {start_page}-{end_page} 頁..."
+                
+                # Process this chunk
+                try:
+                    chunk_response = process_single_pdf_chunk(chunk_path, client, model)
+                    
+                    # Add pages from this chunk to the main collection
+                    for page in chunk_response.pages:
+                        all_pages.append(page)
+                    
+                    yield f"✅ 完成第 {start_page}-{end_page} 頁"
+                
+                except Exception as e:
+                    error_msg = f"❌ 處理第 {start_page}-{end_page} 頁時發生錯誤: {e}"
+                    yield error_msg
+                    raise RuntimeError(error_msg)
+            
+            # Final progress update
+            yield "PDF OCR 進度: 100% - 所有頁面處理完成"
+            
+            # Create a combined response object
+            class CombinedOCRResponse:
+                def __init__(self, pages):
+                    self.pages = pages
+            
+            result = CombinedOCRResponse(all_pages)
+            yield result  # Yield the final result
+    
+    finally:
+        # Clean up temporary directory if we created it
+        if cleanup_temp and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception as e:
+                print(f"⚠️ 無法清理臨時目錄 {temp_dir}: {e}")
+
 # Updated function signature to include structure_text_only
 def process_images_with_ocr(
     pdf_response,
@@ -300,9 +560,25 @@ def process_images_with_ocr(
     structure_model="pixtral-12b-latest",
     structure_text_only=False,
     description_style="json",
+    progress_callback=None,
 ):
     """Process images from PDF pages with OCR and structure using the specified model."""
     image_ocr_results = {}
+    
+    # Count total images for progress tracking
+    total_images = 0
+    for page in pdf_response.pages:
+        total_images += len(page.images)
+    
+    if progress_callback:
+        progress_callback(f"🖼️ 總共找到 {total_images} 個圖片需要處理")
+    
+    if total_images == 0:
+        if progress_callback:
+            progress_callback("圖片 OCR 進度: 100% - 無圖片需要處理")
+        return {}
+    
+    processed_images = 0
     
     for page_idx, page in enumerate(pdf_response.pages):
         for i, img in enumerate(page.images):
@@ -563,8 +839,23 @@ Return ONLY the JSON object, without any surrounding text or markdown formatting
                 # or rely on the outer scope variable 'structure_model' as done here.
                 result = retry_with_backoff(run_ocr_and_parse, retries=4)
                 image_ocr_results[(page_idx, img.id)] = result
+                
+                # Update progress
+                processed_images += 1
+                progress_percent = int((processed_images / total_images) * 100)
+                if progress_callback:
+                    progress_callback(f"圖片 OCR 進度: {progress_percent}% - 已完成 {processed_images}/{total_images} 個圖片")
+                
             except Exception as e:
                 print(f"❌ Failed at page {page_idx+1}, image {i+1}: {e}")
+                processed_images += 1  # Still count as processed even if failed
+                progress_percent = int((processed_images / total_images) * 100)
+                if progress_callback:
+                    progress_callback(f"圖片 OCR 進度: {progress_percent}% - 圖片 {processed_images}/{total_images} 處理失敗: {e}")
+    
+    # Final progress update
+    if progress_callback:
+        progress_callback("圖片 OCR 進度: 100% - 所有圖片處理完成")
     
     # Reorganize results by page
     ocr_by_page = {}
@@ -575,6 +866,319 @@ Return ONLY the JSON object, without any surrounding text or markdown formatting
         )
     
     return ocr_by_page
+
+def process_images_with_ocr_generator(
+    pdf_response,
+    mistral_client,
+    gemini_client,
+    openai_client,
+    structure_model="pixtral-12b-latest",
+    structure_text_only=False,
+    description_style="json",
+):
+    """Generator version of process_images_with_ocr that yields progress messages and final result."""
+    image_ocr_results = {}
+    
+    # Count total images for progress tracking
+    total_images = 0
+    for page in pdf_response.pages:
+        total_images += len(page.images)
+    
+    yield f"🖼️ 總共找到 {total_images} 個圖片需要處理"
+    
+    if total_images == 0:
+        yield "圖片 OCR 進度: 100% - 無圖片需要處理"
+        yield {}  # Return empty dict
+        return
+    
+    processed_images = 0
+    
+    for page_idx, page in enumerate(pdf_response.pages):
+        for i, img in enumerate(page.images):
+            base64_data_url = img.image_base64
+            
+            # Extract raw base64 data for Gemini
+            try:
+                # Handle potential variations in data URL prefix
+                if ',' in base64_data_url:
+                    base64_content = base64_data_url.split(',', 1)[1]
+                else:
+                    # Assume it's just the base64 content if no comma prefix
+                    base64_content = base64_data_url 
+                # Decode and re-encode to ensure it's valid base64 bytes for Gemini
+                image_bytes = base64.b64decode(base64_content)
+            except Exception as e:
+                print(f"⚠️ Error decoding base64 for page {page_idx+1}, image {i+1}: {e}. Skipping image.")
+                processed_images += 1
+                progress_percent = int((processed_images / total_images) * 100)
+                yield f"圖片 OCR 進度: {progress_percent}% - 圖片 {processed_images}/{total_images} 解碼失敗: {e}"
+                continue # Skip this image if base64 is invalid
+
+            def run_ocr_and_parse():
+                # Step 1: Basic OCR (always use Mistral OCR for initial text extraction)
+                print(f"  - Performing basic OCR on page {page_idx+1}, image {i+1}...")
+                image_response = mistral_client.ocr.process(
+                    document=ImageURLChunk(image_url=base64_data_url),
+                    model="mistral-ocr-latest"  # Use the dedicated OCR model here
+                )
+                image_ocr_markdown = image_response.pages[0].markdown
+                print("  - Basic OCR text extracted.")
+
+                if description_style == "plain":
+                    return image_ocr_markdown
+
+                # Step 2: Structure the OCR markdown using the selected model
+                print(f"  - Structuring OCR using: {structure_model}")
+                if structure_model == "pixtral-12b-latest" or structure_model == "mistral-medium-latest":
+                    print(f"    - Using Mistral model: {structure_model}...")
+                    print(f"    - Sending request to Mistral API ({structure_model})...") # Added print statement
+                    structured = mistral_client.chat.parse(
+                        model=structure_model, # Use the selected structure_model
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    ImageURLChunk(image_url=base64_data_url),
+                                    TextChunk(text=(
+                                        f"This is the image's OCR in markdown:\n{image_ocr_markdown}\n. "
+                                        "Convert this into a structured JSON response with the OCR contents in a sensible dictionary."
+                                    ))
+                                ]
+                            }
+                        ],
+                        response_format=StructuredOCR, # Use Pydantic model for expected structure
+                        temperature=0
+                    )
+                    structured_data = structured.choices[0].message.parsed
+                    pretty_text = json.dumps(structured_data.ocr_contents, indent=2, ensure_ascii=False)
+
+                elif structure_model.startswith("gemini"): # Handle gemini-flash-2.0 etc.
+                    print(f"    - Using Google Gemini ({structure_model})...")
+                    # Define the base prompt text
+                    base_prompt_text = f"""
+You are an expert OCR structuring assistant. Your goal is to extract and structure the relevant content into a JSON object based on the provided information.
+
+**Initial OCR Markdown:**
+```markdown
+{image_ocr_markdown}
+```
+
+**Task:**
+Generate a JSON object containing the structured OCR content found in the image. Focus on extracting meaningful information and organizing it logically within the JSON. The JSON should represent the `ocr_contents` field.
+
+**Output Format:**
+Return ONLY the JSON object, without any surrounding text or markdown formatting. Example:
+```json
+{{
+  "title": "Example Title",
+  "sections": [
+    {{"header": "Section 1", "content": "Details..."}},
+    {{"header": "Section 2", "content": "More details..."}}
+  ],
+  "key_value_pairs": {{
+    "key1": "value1",
+    "key2": "value2"
+  }}
+}}
+```
+(Adapt the structure based on the image content.)
+"""
+                    # Prepare API call based on structure_text_only flag
+                    gemini_contents = []
+                    if structure_text_only:
+                        print("    - Mode: Text-only structuring")
+                        # Modify prompt slightly for text-only
+                        gemini_prompt = base_prompt_text.replace(
+                            "Analyze the provided image and the initial OCR text", 
+                            "Analyze the initial OCR text"
+                        ).replace(
+                            "content from the image",
+                            "content from the text"
+                        )
+                        gemini_contents.append(gemini_prompt)
+                    else:
+                        print("    - Mode: Image + Text structuring")
+                        gemini_prompt = base_prompt_text # Use original prompt
+                        # Prepare image part for Gemini using types.Part.from_bytes
+                        # Assuming PNG, might need dynamic type detection in the future
+                        # Pass the decoded image_bytes, not the base64_content string
+                        try: # Corrected indentation
+                            image_part = types.Part.from_bytes(
+                                mime_type="image/png", 
+                                data=image_bytes 
+                            )
+                            gemini_contents = [gemini_prompt, image_part] # Text prompt first, then image Part
+                        except Exception as e:
+                             print(f"    - ⚠️ Error creating Gemini image Part: {e}. Skipping image structuring.")
+                             # Fallback or re-raise depending on desired behavior
+                             pretty_text = json.dumps({"error": "Failed to create Gemini image Part", "details": str(e)}, indent=2, ensure_ascii=False)
+                             return pretty_text # Exit run_ocr_and_parse for this image
+
+                    # Call Gemini API - Corrected to use gemini_client.models.generate_content
+                    print(f"    - Sending request to Gemini API ({structure_model})...") # Added print statement
+                    
+                    try:
+                        response = gemini_client.models.generate_content(
+                            model=structure_model, 
+                            contents=gemini_contents # Pass the constructed list
+                        )
+                    except Exception as api_e:
+                         print(f"    - ⚠️ Error calling Gemini API: {api_e}")
+                         # Fallback or re-raise
+                         pretty_text = json.dumps({"error": "Failed to call Gemini API", "details": str(api_e)}, indent=2, ensure_ascii=False)
+                         return pretty_text # Exit run_ocr_and_parse for this image
+                    
+                    # Extract and clean the JSON response
+                    raw_json_text = response.text.strip()
+                    # Remove potential markdown code fences
+                    if raw_json_text.startswith("```json"):
+                        raw_json_text = raw_json_text[7:]
+                    if raw_json_text.endswith("```"):
+                        raw_json_text = raw_json_text[:-3]
+                    raw_json_text = raw_json_text.strip()
+
+                    # Validate and format the JSON
+                    try:
+                        parsed_json = json.loads(raw_json_text)
+                        pretty_text = json.dumps(parsed_json, indent=2, ensure_ascii=False)
+                    except json.JSONDecodeError as json_e:
+                        print(f"    - ⚠️ Gemini response was not valid JSON: {json_e}")
+                        print(f"    - Raw response: {raw_json_text}")
+                        # Fallback: return the raw text wrapped in a basic JSON structure
+                        pretty_text = json.dumps({"error": "Failed to parse Gemini JSON response", "raw_output": raw_json_text}, indent=2, ensure_ascii=False)
+
+                elif structure_model.startswith("gpt-"):
+                    print(f"    - Using OpenAI model: {structure_model}...")
+                    if not openai_client:
+                        print("    - ⚠️ OpenAI client not initialized. Skipping.")
+                        return json.dumps({"error": "OpenAI client not initialized. Check API key and library installation."}, indent=2, ensure_ascii=False)
+
+                    # Define the base prompt text for OpenAI
+                    openai_base_prompt = f"""
+You are an expert OCR structuring assistant. Your goal is to extract and structure the relevant content into a JSON object based on the provided information.
+
+**Initial OCR Markdown:**
+```markdown
+{image_ocr_markdown}
+```
+
+**Task:**
+Generate a JSON object containing the structured OCR content found in the image. Focus on extracting meaningful information and organizing it logically within the JSON. The JSON should represent the `ocr_contents` field.
+
+**Output Format:**
+Return ONLY the JSON object, without any surrounding text or markdown formatting. Example:
+```json
+{{
+  "title": "Example Title",
+  "sections": [
+    {{"header": "Section 1", "content": "Details..."}},
+    {{"header": "Section 2", "content": "More details..."}}
+  ],
+  "key_value_pairs": {{
+    "key1": "value1",
+    "key2": "value2"
+  }}
+}}
+```
+(Adapt the structure based on the image content. Ensure the output is valid JSON.)
+"""
+                    # Prepare payload for OpenAI vision based on structure_text_only
+                    openai_content_list = []
+                    if structure_text_only:
+                        print("    - Mode: Text-only structuring")
+                        # Modify prompt slightly for text-only
+                        openai_prompt = openai_base_prompt.replace(
+                            "Analyze the provided image and the initial OCR text", 
+                            "Analyze the initial OCR text"
+                        ).replace(
+                            "content from the image",
+                            "content from the text"
+                        )
+                        openai_content_list.append({"type": "text", "text": openai_prompt})
+                    else:
+                        print("    - Mode: Image + Text structuring")
+                        openai_prompt = openai_base_prompt # Use original prompt
+                        # Use the base64_content string directly for the data URL
+                        # Assuming PNG, might need dynamic type detection
+                        image_data_url = f"data:image/png;base64,{base64_content}" # Corrected indentation
+                        openai_content_list.append({"type": "text", "text": openai_prompt})
+                        openai_content_list.append({
+                            "type": "image_url",
+                            "image_url": {"url": image_data_url, "detail": "auto"}, 
+                        })
+
+                    print(f"    - Sending request to OpenAI API ({structure_model})...")
+                    try:
+                        response = openai_client.chat.completions.create(
+                            model=structure_model,
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": openai_content_list, # Pass the constructed list
+                                }
+                            ],
+                            # Optionally add max_tokens if needed, but rely on prompt for JSON structure
+                            # max_tokens=1000, 
+                            temperature=0.1 # Lower temperature for deterministic JSON
+                        )
+                        
+                        raw_json_text = response.choices[0].message.content.strip()
+                        # Clean potential markdown fences
+                        if raw_json_text.startswith("```json"):
+                            raw_json_text = raw_json_text[7:]
+                        if raw_json_text.endswith("```"):
+                            raw_json_text = raw_json_text[:-3]
+                        raw_json_text = raw_json_text.strip()
+
+                        # Validate and format JSON
+                        try:
+                            parsed_json = json.loads(raw_json_text)
+                            pretty_text = json.dumps(parsed_json, indent=2, ensure_ascii=False)
+                        except json.JSONDecodeError as json_e:
+                            print(f"    - ⚠️ OpenAI response was not valid JSON: {json_e}")
+                            print(f"    - Raw response: {raw_json_text}")
+                            pretty_text = json.dumps({"error": "Failed to parse OpenAI JSON response", "raw_output": raw_json_text}, indent=2, ensure_ascii=False)
+
+                    except Exception as api_e:
+                        print(f"    - ⚠️ Error calling OpenAI API: {api_e}")
+                        pretty_text = json.dumps({"error": "Failed to call OpenAI API", "details": str(api_e)}, indent=2, ensure_ascii=False)
+                
+                else: # Final attempt to correct indentation for the final else
+                    print(f"    - ⚠️ Unsupported structure model: {structure_model}. Skipping structuring.")
+                    # Fallback: return the basic OCR markdown wrapped in JSON
+                    pretty_text = json.dumps({"unstructured_ocr": image_ocr_markdown}, indent=2, ensure_ascii=False)
+
+                return pretty_text
+            
+            try:
+                # Pass the actual structure model name to the inner function if needed,
+                # or rely on the outer scope variable 'structure_model' as done here.
+                result = retry_with_backoff(run_ocr_and_parse, retries=4)
+                image_ocr_results[(page_idx, img.id)] = result
+                
+                # Update progress
+                processed_images += 1
+                progress_percent = int((processed_images / total_images) * 100)
+                yield f"圖片 OCR 進度: {progress_percent}% - 已完成 {processed_images}/{total_images} 個圖片"
+                
+            except Exception as e:
+                print(f"❌ Failed at page {page_idx+1}, image {i+1}: {e}")
+                processed_images += 1  # Still count as processed even if failed
+                progress_percent = int((processed_images / total_images) * 100)
+                yield f"圖片 OCR 進度: {progress_percent}% - 圖片 {processed_images}/{total_images} 處理失敗: {e}"
+    
+    # Final progress update
+    yield "圖片 OCR 進度: 100% - 所有圖片處理完成"
+    
+    # Reorganize results by page
+    ocr_by_page = {}
+    for (page_idx, img_id), ocr_text in image_ocr_results.items():
+        ocr_by_page.setdefault(page_idx, {})[img_id] = ocr_text
+        print(
+            f"  - Successfully processed page {page_idx+1}, image {img_id} with {structure_model}."
+        )
+    
+    yield ocr_by_page  # Yield the final result
 
 # ===== Checkpoint Functions =====
 
@@ -648,10 +1252,27 @@ def process_pdf_to_markdown(
             yield load_msg
 
     if pdf_response is None:
-        msg = "🔍 正在處理 PDF OCR..."
+        msg = "🔍 開始 PDF OCR 處理..."
         yield msg
         print(msg) # Console print
-        pdf_response = process_pdf_with_mistral_ocr(pdf_path, mistral_client, model=ocr_model)
+        
+        # Create a progress callback for PDF OCR
+        def pdf_progress_callback(message):
+            yield message
+            print(message)
+        
+        # Process PDF with progress tracking
+        pdf_generator = process_pdf_with_mistral_ocr_generator(
+            pdf_path, mistral_client, model=ocr_model, max_pages_per_chunk=30
+        )
+        
+        # Iterate through the generator to get progress and final result
+        for item in pdf_generator:
+            if hasattr(item, 'pages'):  # This is the final result
+                pdf_response = item
+            else:  # This is a progress message
+                yield item
+        
         save_msg = save_checkpoint(pdf_response, pdf_ocr_checkpoint) # save_checkpoint already prints
         if save_msg:
             yield save_msg
@@ -668,11 +1289,12 @@ def process_pdf_to_markdown(
                 yield load_msg
 
         if ocr_by_page is None or not ocr_by_page: # Check if empty dict from checkpoint or explicitly empty
-            msg = f"🖼️ 正在使用 '{structure_model}' 處理圖片 OCR 與結構化..."
+            msg = f"🖼️ 開始使用 '{structure_model}' 處理圖片 OCR 與結構化..."
             yield msg
             print(msg) # Console print
-            # Pass gemini_client and correct structure_model parameter name
-            ocr_by_page = process_images_with_ocr(
+            
+            # Create a generator for image OCR processing
+            image_generator = process_images_with_ocr_generator(
                 pdf_response,
                 mistral_client,
                 gemini_client,
@@ -681,6 +1303,14 @@ def process_pdf_to_markdown(
                 structure_text_only=structure_text_only,  # Pass the text-only flag
                 description_style=image_description_style,
             )
+            
+            # Iterate through the generator to get progress and final result
+            for item in image_generator:
+                if isinstance(item, dict) and 'pages' not in str(type(item)):  # This is the final result (ocr_by_page dict)
+                    ocr_by_page = item
+                else:  # This is a progress message
+                    yield item
+            
             save_msg = save_checkpoint(ocr_by_page, image_ocr_checkpoint) # save_checkpoint already prints
             if save_msg:
                 yield save_msg
