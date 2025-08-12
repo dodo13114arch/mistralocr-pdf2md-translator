@@ -243,12 +243,12 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
     total_pages = len(pages) # Get total pages for progress
     
     # Initial progress message
-    yield f"📝 開始翻譯，共 {total_pages} 頁需要處理"
+    yield f"📝 [翻譯] 開始翻譯，共 {total_pages} 頁需要處理"
 
     for idx, page in enumerate(pages):
         # Calculate progress percentage
         progress_percent = int((idx / total_pages) * 100)
-        progress_message = f"翻譯進度: {progress_percent}% - 正在翻譯第 {idx+1}/{total_pages} 頁..."
+        progress_message = f"[翻譯] 進度: {progress_percent}% - 正在翻譯第 {idx+1}/{total_pages} 頁..."
         print(progress_message) # Print to console
         yield progress_message # Yield progress string for Gradio log
 
@@ -278,7 +278,7 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
                     )
                     translated_md = response.choices[0].message.content.strip()
                 except Exception as openai_e:
-                    error_msg = f"⚠️ OpenAI 翻譯第 {idx+1} / {total_pages} 頁失敗：{openai_e}"
+                    error_msg = f"⚠️ [翻譯] OpenAI 翻譯第 {idx+1} / {total_pages} 頁失敗：{openai_e}"
                     print(error_msg)
                     yield error_msg # Yield error string to Gradio log
                     yield f"--- ERROR: OpenAI Translation Failed for Page {idx+1} ---\n\n{page}"
@@ -310,7 +310,7 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
                     )
                     translated_md = response.choices[0].message.content.strip()
                 except Exception as mistral_e:
-                    error_msg = f"⚠️ Mistral 翻譯第 {idx+1} / {total_pages} 頁失敗：{mistral_e}"
+                    error_msg = f"⚠️ [翻譯] Mistral 翻譯第 {idx+1} / {total_pages} 頁失敗：{mistral_e}"
                     print(error_msg)
                     yield error_msg
                     yield f"--- ERROR: Mistral Translation Failed for Page {idx+1} ---\n\n{page}"
@@ -330,13 +330,13 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
             yield translated_md # Yield the actual translated page content
 
         except Exception as e:
-            error_msg = f"⚠️ 翻譯第 {idx+1} / {total_pages} 頁失敗：{e}"
+            error_msg = f"⚠️ [翻譯] 翻譯第 {idx+1} / {total_pages} 頁失敗：{e}"
             print(error_msg)
             yield error_msg # Yield error string to Gradio log
             # Yield error marker instead of translated content
             yield f"--- ERROR: Translation Failed for Page {idx+1} ---\n\n{page}"
 
-    final_message = f"翻譯進度: 100% - 所有頁面翻譯完成 ({total_pages} 頁)"
+    final_message = f"[翻譯] 進度: 100% - 所有頁面翻譯完成 ({total_pages} 頁)"
     yield final_message # Yield final translation status string
     print(final_message) # Print final translation status
     # No return needed for a generator yielding results
@@ -464,9 +464,10 @@ def process_pdf_with_mistral_ocr(pdf_path, client, model="mistral-ocr-latest", m
             except Exception as e:
                 print(f"⚠️ 無法清理臨時目錄 {temp_dir}: {e}")
 
-def process_pdf_with_mistral_ocr_generator(pdf_path, client, model="mistral-ocr-latest", max_pages_per_chunk=30, temp_dir=None):
+def process_pdf_with_mistral_ocr_generator(pdf_path, client, model="mistral-ocr-latest", max_pages_per_chunk=30, temp_dir=None, checkpoint_dir=None):
     """Generator version of process_pdf_with_mistral_ocr that yields progress messages and final result."""
     pdf_file = Path(pdf_path)
+    sanitized_stem = pdf_file.stem.replace(" ", "_")
     
     # Create temporary directory if not provided
     if temp_dir is None:
@@ -477,32 +478,32 @@ def process_pdf_with_mistral_ocr_generator(pdf_path, client, model="mistral-ocr-
     
     try:
         # Check PDF page count
-        yield "📄 正在檢查PDF頁數..."
+        yield "📄 [PDF OCR] 正在檢查PDF頁數..."
         
         total_pages = get_pdf_page_count(pdf_path)
         if total_pages == 0:
             raise ValueError("無法讀取PDF或PDF為空")
         
-        yield f"📊 PDF共有 {total_pages} 頁"
+        yield f"📊 [PDF OCR] PDF共有 {total_pages} 頁"
         
         # Decide whether to split the PDF
         if total_pages <= max_pages_per_chunk:
             # Process directly without splitting
-            yield "🔄 PDF頁數不多，直接處理..."
-            yield "PDF OCR 進度: 100%"
+            yield "🔄 [PDF OCR] PDF頁數不多，直接處理..."
+            yield "[PDF OCR] 進度: 100%"
             
             result = process_single_pdf_chunk(pdf_path, client, model)
             yield result  # Yield the final result
         
         else:
             # Split and process in chunks
-            yield f"✂️ PDF頁數較多 ({total_pages}頁)，將分成多個批次處理 (每批最多{max_pages_per_chunk}頁)"
+            yield f"✂️ [PDF OCR] PDF頁數較多 ({total_pages}頁)，將分成多個批次處理 (每批最多{max_pages_per_chunk}頁)"
             
             # Split PDF into chunks
             chunks_dir = os.path.join(temp_dir, "pdf_chunks")
             chunk_files, _ = split_pdf_by_pages(pdf_path, chunks_dir, max_pages_per_chunk)
             
-            yield f"📂 已分割為 {len(chunk_files)} 個檔案"
+            yield f"📂 [PDF OCR] 已分割為 {len(chunk_files)} 個檔案"
             
             # Process each chunk and collect results
             all_pages = []
@@ -515,7 +516,7 @@ def process_pdf_with_mistral_ocr_generator(pdf_path, client, model="mistral-ocr-
                 
                 # Update progress
                 progress_percent = int((i / total_chunks) * 100)
-                yield f"PDF OCR 進度: {progress_percent}% - 正在處理第 {start_page}-{end_page} 頁..."
+                yield f"[PDF OCR] 進度: {progress_percent}% - 正在處理第 {start_page}-{end_page} 頁..."
                 
                 # Process this chunk
                 try:
@@ -525,15 +526,29 @@ def process_pdf_with_mistral_ocr_generator(pdf_path, client, model="mistral-ocr-
                     for page in chunk_response.pages:
                         all_pages.append(page)
                     
-                    yield f"✅ 完成第 {start_page}-{end_page} 頁"
+                    # 即時儲存批次結果到checkpoint (避免全部處理完才儲存失敗)
+                    if checkpoint_dir:
+                        batch_checkpoint = os.path.join(checkpoint_dir, f"{sanitized_stem}_pdf_ocr_batch_{i+1}.pkl")
+                        try:
+                            class PartialOCRResponse:
+                                def __init__(self, pages):
+                                    self.pages = pages
+                            partial_result = PartialOCRResponse(all_pages)  # 儲存目前累積的所有頁面
+                            save_checkpoint(partial_result, batch_checkpoint)
+                            yield f"💾 [PDF OCR] 已儲存批次 {i+1} 檢查點"
+                        except Exception as save_e:
+                            yield f"⚠️ [PDF OCR] 批次儲存失敗，但繼續處理: {save_e}"
+                    
+                    completion_percent = int(((i + 1) / total_chunks) * 100)
+                    yield f"✅ [PDF OCR] 進度: {completion_percent}% - 完成第 {start_page}-{end_page} 頁"
                 
                 except Exception as e:
-                    error_msg = f"❌ 處理第 {start_page}-{end_page} 頁時發生錯誤: {e}"
+                    error_msg = f"❌ [PDF OCR] 處理第 {start_page}-{end_page} 頁時發生錯誤: {e}"
                     yield error_msg
                     raise RuntimeError(error_msg)
             
             # Final progress update
-            yield "PDF OCR 進度: 100% - 所有頁面處理完成"
+            yield "[PDF OCR] 進度: 100% - 所有頁面處理完成"
             
             # Create a combined response object
             class CombinedOCRResponse:
@@ -571,11 +586,11 @@ def process_images_with_ocr(
         total_images += len(page.images)
     
     if progress_callback:
-        progress_callback(f"🖼️ 總共找到 {total_images} 個圖片需要處理")
+        progress_callback(f"🖼️ [圖片 OCR] 總共找到 {total_images} 個圖片需要處理")
     
     if total_images == 0:
         if progress_callback:
-            progress_callback("圖片 OCR 進度: 100% - 無圖片需要處理")
+            progress_callback("[圖片 OCR] 進度: 100% - 無圖片需要處理")
         return {}
     
     processed_images = 0
@@ -844,18 +859,18 @@ Return ONLY the JSON object, without any surrounding text or markdown formatting
                 processed_images += 1
                 progress_percent = int((processed_images / total_images) * 100)
                 if progress_callback:
-                    progress_callback(f"圖片 OCR 進度: {progress_percent}% - 已完成 {processed_images}/{total_images} 個圖片")
+                    progress_callback(f"[圖片 OCR] 進度: {progress_percent}% - 已完成 {processed_images}/{total_images} 個圖片")
                 
             except Exception as e:
                 print(f"❌ Failed at page {page_idx+1}, image {i+1}: {e}")
                 processed_images += 1  # Still count as processed even if failed
                 progress_percent = int((processed_images / total_images) * 100)
                 if progress_callback:
-                    progress_callback(f"圖片 OCR 進度: {progress_percent}% - 圖片 {processed_images}/{total_images} 處理失敗: {e}")
+                    progress_callback(f"[圖片 OCR] 進度: {progress_percent}% - 圖片 {processed_images}/{total_images} 處理失敗: {e}")
     
     # Final progress update
     if progress_callback:
-        progress_callback("圖片 OCR 進度: 100% - 所有圖片處理完成")
+        progress_callback("[圖片 OCR] 進度: 100% - 所有圖片處理完成")
     
     # Reorganize results by page
     ocr_by_page = {}
@@ -884,10 +899,10 @@ def process_images_with_ocr_generator(
     for page in pdf_response.pages:
         total_images += len(page.images)
     
-    yield f"🖼️ 總共找到 {total_images} 個圖片需要處理"
+    yield f"🖼️ [圖片 OCR] 總共找到 {total_images} 個圖片需要處理"
     
     if total_images == 0:
-        yield "圖片 OCR 進度: 100% - 無圖片需要處理"
+        yield "[圖片 OCR] 進度: 100% - 無圖片需要處理"
         yield {}  # Return empty dict
         return
     
@@ -911,7 +926,7 @@ def process_images_with_ocr_generator(
                 print(f"⚠️ Error decoding base64 for page {page_idx+1}, image {i+1}: {e}. Skipping image.")
                 processed_images += 1
                 progress_percent = int((processed_images / total_images) * 100)
-                yield f"圖片 OCR 進度: {progress_percent}% - 圖片 {processed_images}/{total_images} 解碼失敗: {e}"
+                yield f"[圖片 OCR] 進度: {progress_percent}% - 圖片 {processed_images}/{total_images} 解碼失敗: {e}"
                 continue # Skip this image if base64 is invalid
 
             def run_ocr_and_parse():
@@ -1159,16 +1174,16 @@ Return ONLY the JSON object, without any surrounding text or markdown formatting
                 # Update progress
                 processed_images += 1
                 progress_percent = int((processed_images / total_images) * 100)
-                yield f"圖片 OCR 進度: {progress_percent}% - 已完成 {processed_images}/{total_images} 個圖片"
+                yield f"[圖片 OCR] 進度: {progress_percent}% - 已完成 {processed_images}/{total_images} 個圖片"
                 
             except Exception as e:
                 print(f"❌ Failed at page {page_idx+1}, image {i+1}: {e}")
                 processed_images += 1  # Still count as processed even if failed
                 progress_percent = int((processed_images / total_images) * 100)
-                yield f"圖片 OCR 進度: {progress_percent}% - 圖片 {processed_images}/{total_images} 處理失敗: {e}"
+                yield f"[圖片 OCR] 進度: {progress_percent}% - 圖片 {processed_images}/{total_images} 處理失敗: {e}"
     
     # Final progress update
-    yield "圖片 OCR 進度: 100% - 所有圖片處理完成"
+    yield "[圖片 OCR] 進度: 100% - 所有圖片處理完成"
     
     # Reorganize results by page
     ocr_by_page = {}
@@ -1252,7 +1267,7 @@ def process_pdf_to_markdown(
             yield load_msg
 
     if pdf_response is None:
-        msg = "🔍 開始 PDF OCR 處理..."
+        msg = "🔍 [PDF OCR] 開始 PDF OCR 處理..."
         yield msg
         print(msg) # Console print
         
@@ -1263,7 +1278,7 @@ def process_pdf_to_markdown(
         
         # Process PDF with progress tracking
         pdf_generator = process_pdf_with_mistral_ocr_generator(
-            pdf_path, mistral_client, model=ocr_model, max_pages_per_chunk=30
+            pdf_path, mistral_client, model=ocr_model, max_pages_per_chunk=30, checkpoint_dir=checkpoint_dir
         )
         
         # Iterate through the generator to get progress and final result
@@ -1289,7 +1304,7 @@ def process_pdf_to_markdown(
                 yield load_msg
 
         if ocr_by_page is None or not ocr_by_page: # Check if empty dict from checkpoint or explicitly empty
-            msg = f"🖼️ 開始使用 '{structure_model}' 處理圖片 OCR 與結構化..."
+            msg = f"🖼️ [圖片 OCR] 開始使用 '{structure_model}' 處理圖片 OCR 與結構化..."
             yield msg
             print(msg) # Console print
             
@@ -1329,7 +1344,7 @@ def process_pdf_to_markdown(
             yield load_msg
 
     if raw_page_data is None:
-        msg = "📝 正在建立原始頁面資料 (Markdown + 圖片資訊)..."
+        msg = "📝 [資料整理] 正在建立原始頁面資料 (Markdown + 圖片資訊)..."
         yield msg
         print(msg)
         raw_page_data = []
@@ -1348,7 +1363,7 @@ def process_pdf_to_markdown(
     # Step 3.5: Conditionally insert image OCR results based on CURRENT UI selection
     pages_after_ocr_insertion = [] # List to hold markdown strings after potential OCR insertion
     if process_images and ocr_by_page: # Check if UI wants OCR AND if OCR results exist
-        msg = "✍️ 根據目前設定，正在將圖片 OCR 結果插入 Markdown..."
+        msg = "✍️ [資料整理] 根據目前設定，正在將圖片 OCR 結果插入 Markdown..."
         yield msg
         print(msg)
         for page_idx, (raw_md, _) in enumerate(raw_page_data): # Iterate through raw data
@@ -1377,7 +1392,7 @@ def process_pdf_to_markdown(
     final_markdown_pages = [] # This list will have final file paths as links
     # Use sanitized_stem for image folder name
     image_folder_name = os.path.join(output_dir, f"images_{sanitized_stem}") 
-    msg = f"🖼️ 正在儲存圖片並更新 Markdown 連結至 '{os.path.basename(image_folder_name)}'..."
+    msg = f"🖼️ [檔案儲存] 正在儲存圖片並更新 Markdown 連結至 '{os.path.basename(image_folder_name)}'..."
     yield msg
     print(msg)
     # Iterate using the pages_after_ocr_insertion list and the original image dicts from raw_page_data
