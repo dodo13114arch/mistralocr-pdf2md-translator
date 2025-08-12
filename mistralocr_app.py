@@ -163,8 +163,8 @@ TRANSLATION_STYLE_PROMPTS = {
 }
 
 # Updated signature to accept openai_client
-def translate_markdown_pages(pages, gemini_client, openai_client, model="gemini-2.0-flash", system_instruction=None):
-    """Translate markdown pages using the selected API (Gemini or OpenAI). Yields progress strings and translated page content."""
+def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client, model="gemini-2.0-flash", system_instruction=None):
+    """Translate markdown pages using the selected API (Mistral, Gemini or OpenAI). Yields progress strings and translated page content."""
     if system_instruction is None:
         system_instruction = DEFAULT_TRANSLATION_SYSTEM_INSTRUCTION
 
@@ -219,6 +219,26 @@ def translate_markdown_pages(pages, gemini_client, openai_client, model="gemini-
                     contents=page
                 )
                 translated_md = response.text.strip()
+            
+            elif model.startswith("mistral"):
+                # --- Mistral Translation Logic ---
+                print(f"    - Translating using Mistral model: {model}")
+                try:
+                    response = mistral_client.chat.complete(
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": page}
+                        ],
+                        temperature=0.1
+                    )
+                    translated_md = response.choices[0].message.content.strip()
+                except Exception as mistral_e:
+                    error_msg = f"⚠️ Mistral 翻譯第 {idx+1} / {total_pages} 頁失敗：{mistral_e}"
+                    print(error_msg)
+                    yield error_msg
+                    yield f"--- ERROR: Mistral Translation Failed for Page {idx+1} ---\n\n{page}"
+                    continue # Skip to next page
             
             else:
                 # --- Unsupported Model ---
@@ -317,9 +337,9 @@ def process_images_with_ocr(
 
                 # Step 2: Structure the OCR markdown using the selected model
                 print(f"  - Structuring OCR using: {structure_model}")
-                if structure_model == "pixtral-12b-latest":
-                    print("    - Using Mistral Pixtral...")
-                    print("    - Sending request to Pixtral API...") # Added print statement
+                if structure_model == "pixtral-12b-latest" or structure_model == "mistral-medium-latest":
+                    print(f"    - Using Mistral model: {structure_model}...")
+                    print(f"    - Sending request to Mistral API ({structure_model})...") # Added print statement
                     structured = mistral_client.chat.parse(
                         model=structure_model, # Use the selected structure_model
                         messages=[
@@ -743,6 +763,7 @@ def process_pdf_to_markdown(
         # Translate the final list with correct image links, passing both clients
         translation_generator = translate_markdown_pages(
             final_markdown_pages, 
+            mistral_client,
             gemini_client,
             openai_client, # Pass openai_client
             model=translation_model,
@@ -1101,39 +1122,47 @@ def create_gradio_interface():
                         choices=[
                             ("pixtral-12b-latest (Recommended)", "pixtral-12b-latest"),
                             ("gemini-2.0-flash (Recommended)", "gemini-2.0-flash"),
-                            ("gemini-2.5-flash-preview-05-20", "gemini-2.5-flash-preview-05-20"),
                             ("gemini-2.5-flash", "gemini-2.5-flash"),
+                            ("mistral-medium-latest", "mistral-medium-latest"),
                             ("gpt-4o-mini", "gpt-4o-mini"),
                             ("gpt-4o", "gpt-4o"),
+                            ("gpt-5-nano", "gpt-5-nano"),
+                            ("gpt-5-mini", "gpt-5-mini"),
+                            ("gpt-5", "gpt-5"),
                             ("gpt-4.1-nano (Not Recommended)", "gpt-4.1-nano"),
                             ("gpt-4.1-mini", "gpt-4.1-mini"),
                             ("gpt-4.1", "gpt-4.1")
                         ], 
                         value="gemini-2.0-flash",
-                        info="選擇用於結構化圖片 OCR 結果的模型。選擇 Gemini 或 OpenAI 模型需要對應的 API Key 在 .env 檔案中設定。"
+                        info="選擇用於結構化圖片 OCR 結果的模型。選擇 Mistral、Gemini 或 OpenAI 模型需要對應的 API Key 在 .env 檔案中設定。"
                     )
                     structure_text_only = gr.Checkbox(
                         label="僅用文字進行結構化 (節省 Token)",
                         value=False,
-                        info="勾選後，僅將圖片的初步 OCR 文字傳送給 Gemini 或 OpenAI 進行結構化，不傳送圖片本身。對 Pixtral 無效。⚠️注意：缺少圖片視覺資訊可能導致結構化效果不佳，建議僅在 OCR 文字已足夠清晰時使用。"
+                        info="勾選後，僅將圖片的初步 OCR 文字傳送給 Gemini 或 OpenAI 進行結構化，不傳送圖片本身。對 Mistral 模型無效。⚠️注意：缺少圖片視覺資訊可能導致結構化效果不佳，建議僅在 OCR 文字已足夠清晰時使用。"
                     )
                     translation_model = gr.Dropdown(
                         label="翻譯模型", 
                         choices=[
                             ("gemini-2.0-flash (Recommended)", "gemini-2.0-flash"),
-                            ("gemini-2.5-flash-preview-05-20", "gemini-2.5-flash-preview-05-20"),
                             ("gemini-2.5-flash", "gemini-2.5-flash"),
-                            ("gemini-2.5-pro-exp-03-25", "gemini-2.5-pro-exp-03-25"),
+                            ("gemini-2.5-pro", "gemini-2.5-pro"),
                             ("gemini-2.0-flash-lite", "gemini-2.0-flash-lite"),
+                            ("mistral-medium-latest", "mistral-medium-latest"),
                             ("gpt-4o", "gpt-4o"), 
                             ("gpt-4o-mini", "gpt-4o-mini"),
+                            ("gpt-5-nano", "gpt-5-nano"),
+                            ("gpt-5-mini", "gpt-5-mini"),
+                            ("gpt-5", "gpt-5"),
+                            ("gpt-oss-20b", "gpt-oss-20b"),
+                            ("gpt-oss-120b", "gpt-oss-120b"),
                             ("o4-mini-2025-04-16", "o4-mini-2025-04-16"),
                             ("gpt-4.1-nano (Not Recommended)", "gpt-4.1-nano"),
                             ("gpt-4.1-mini", "gpt-4.1-mini"),
                             ("gpt-4.1", "gpt-4.1")
                         ], 
                         value="gemini-2.0-flash",
-                        info="選擇用於翻譯的模型。選擇 Gemini 或 OpenAI 模型需要對應的 API Key 在 .env 檔案中設定。"
+                        info="選擇用於翻譯的模型。選擇 Mistral、Gemini 或 OpenAI 模型需要對應的 API Key 在 .env 檔案中設定。"
                     )
                 with gr.Accordion("進階設定", open=False):
                     translation_style = gr.Dropdown(

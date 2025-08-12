@@ -1,7 +1,0 @@
-name: mistral_ocr_env
-channels:
-  - defaults
-dependencies:
-  - python=3.10
-  - ipykernel
-# prefix: C:\Users\Dodo\miniconda3\envs\mistral_ocr_env
