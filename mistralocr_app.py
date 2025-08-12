@@ -343,6 +343,17 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
 
 # ===== PDF Processing Functions =====
 
+# Response classes for OCR processing
+class PartialOCRResponse:
+    """用於儲存部分OCR結果的類別"""
+    def __init__(self, pages):
+        self.pages = pages
+
+class CombinedOCRResponse:
+    """用於合併多個OCR結果的類別"""
+    def __init__(self, pages):
+        self.pages = pages
+
 def process_single_pdf_chunk(pdf_path, client, model="mistral-ocr-latest"):
     """Process a single PDF chunk with Mistral OCR."""
     pdf_file = Path(pdf_path)
@@ -450,10 +461,6 @@ def process_pdf_with_mistral_ocr(pdf_path, client, model="mistral-ocr-latest", m
             # Create a combined response object
             # We need to mimic the structure of the original OCRResponse
             # For simplicity, we'll create a basic object with the pages
-            class CombinedOCRResponse:
-                def __init__(self, pages):
-                    self.pages = pages
-            
             return CombinedOCRResponse(all_pages)
     
     finally:
@@ -505,14 +512,49 @@ def process_pdf_with_mistral_ocr_generator(pdf_path, client, model="mistral-ocr-
             
             yield f"📂 [PDF OCR] 已分割為 {len(chunk_files)} 個檔案"
             
-            # Process each chunk and collect results
+            # 檢查是否有已處理的批次 (從checkpoint_dir中檢測)
+            processed_batches = set()
             all_pages = []
+            if checkpoint_dir and os.path.exists(checkpoint_dir):
+                for i in range(1, len(chunk_files) + 1):
+                    batch_checkpoint = os.path.join(checkpoint_dir, f"{sanitized_stem}_pdf_ocr_batch_{i}.pkl")
+                    if os.path.exists(batch_checkpoint):
+                        try:
+                            # 嘗試載入該批次的檢查點
+                            with open(batch_checkpoint, 'rb') as f:
+                                batch_data = pickle.load(f)
+                                if hasattr(batch_data, 'pages') and batch_data.pages:
+                                    # 計算應該有多少頁面 (批次1到i的累積)
+                                    expected_pages = 0
+                                    for j in range(i):
+                                        expected_pages += chunk_files[j]['pages_in_chunk']
+                                    
+                                    # 如果頁面數符合預期，認為批次完整
+                                    if len(batch_data.pages) >= expected_pages:
+                                        processed_batches.add(i)
+                                        all_pages = batch_data.pages.copy()  # 載入已處理的頁面
+                                        yield f"✅ [PDF OCR] 發現完整的批次 {i} 檢查點，已載入 {len(all_pages)} 頁"
+                        except Exception as e:
+                            yield f"⚠️ [PDF OCR] 批次 {i} 檢查點損壞，將重新處理: {e}"
+            
+            if processed_batches:
+                max_processed = max(processed_batches)
+                yield f"🔄 [PDF OCR] 將從批次 {max_processed + 1} 開始繼續處理"
+            
+            # Process each chunk and collect results
             total_chunks = len(chunk_files)
             
             for i, chunk_info in enumerate(chunk_files):
+                batch_num = i + 1  # 批次編號從1開始
                 chunk_path = chunk_info['path']
                 start_page = chunk_info['start_page']
                 end_page = chunk_info['end_page']
+                
+                # 檢查該批次是否已經處理過
+                if batch_num in processed_batches:
+                    completion_percent = int((batch_num / total_chunks) * 100)
+                    yield f"⏭️ [PDF OCR] 進度: {completion_percent}% - 跳過已處理的第 {start_page}-{end_page} 頁 (批次 {batch_num})"
+                    continue
                 
                 # Update progress
                 progress_percent = int((i / total_chunks) * 100)
@@ -526,20 +568,41 @@ def process_pdf_with_mistral_ocr_generator(pdf_path, client, model="mistral-ocr-
                     for page in chunk_response.pages:
                         all_pages.append(page)
                     
-                    # 即時儲存批次結果到checkpoint (避免全部處理完才儲存失敗)
+                    # 即時儲存批次結果 - 1. 儲存pkl檢查點
                     if checkpoint_dir:
-                        batch_checkpoint = os.path.join(checkpoint_dir, f"{sanitized_stem}_pdf_ocr_batch_{i+1}.pkl")
+                        batch_checkpoint = os.path.join(checkpoint_dir, f"{sanitized_stem}_pdf_ocr_batch_{batch_num}.pkl")
                         try:
-                            class PartialOCRResponse:
-                                def __init__(self, pages):
-                                    self.pages = pages
                             partial_result = PartialOCRResponse(all_pages)  # 儲存目前累積的所有頁面
                             save_checkpoint(partial_result, batch_checkpoint)
-                            yield f"💾 [PDF OCR] 已儲存批次 {i+1} 檢查點"
+                            yield f"💾 [PDF OCR] 已儲存批次 {batch_num} 檢查點"
                         except Exception as save_e:
                             yield f"⚠️ [PDF OCR] 批次儲存失敗，但繼續處理: {save_e}"
+                        
+                        # 即時儲存批次結果 - 2. 儲存該批次的markdown檔案 (作為備份)
+                        try:
+                            # 提取該批次的markdown內容
+                            batch_markdown_pages = []
+                            for page in chunk_response.pages:
+                                batch_markdown_pages.append(page.markdown)
+                            
+                            # 合併該批次的所有頁面markdown
+                            batch_markdown_content = "\n\n---\n\n".join(batch_markdown_pages)
+                            
+                            # 儲存該批次的markdown檔案
+                            batch_md_file = os.path.join(checkpoint_dir, f"{sanitized_stem}_batch_{batch_num}_pages_{start_page}-{end_page}.md")
+                            with open(batch_md_file, "w", encoding="utf-8") as f:
+                                f.write(f"# PDF OCR 批次 {batch_num} (第 {start_page}-{end_page} 頁)\n\n")
+                                f.write(f"檔案: {pdf_file.name}\n")
+                                f.write(f"處理時間: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                                f.write("---\n\n")
+                                f.write(batch_markdown_content)
+                            
+                            yield f"📄 [PDF OCR] 已儲存批次 {batch_num} Markdown檔案: {os.path.basename(batch_md_file)}"
+                            
+                        except Exception as md_save_e:
+                            yield f"⚠️ [PDF OCR] 批次Markdown儲存失敗，但繼續處理: {md_save_e}"
                     
-                    completion_percent = int(((i + 1) / total_chunks) * 100)
+                    completion_percent = int((batch_num / total_chunks) * 100)
                     yield f"✅ [PDF OCR] 進度: {completion_percent}% - 完成第 {start_page}-{end_page} 頁"
                 
                 except Exception as e:
@@ -551,10 +614,6 @@ def process_pdf_with_mistral_ocr_generator(pdf_path, client, model="mistral-ocr-
             yield "[PDF OCR] 進度: 100% - 所有頁面處理完成"
             
             # Create a combined response object
-            class CombinedOCRResponse:
-                def __init__(self, pages):
-                    self.pages = pages
-            
             result = CombinedOCRResponse(all_pages)
             yield result  # Yield the final result
     
@@ -1197,6 +1256,85 @@ Return ONLY the JSON object, without any surrounding text or markdown formatting
 
 # ===== Checkpoint Functions =====
 
+def merge_batch_markdown_files(checkpoint_dir, sanitized_stem, output_file=None):
+    """
+    手動合併已儲存的批次markdown檔案
+    
+    Args:
+        checkpoint_dir: 檢查點目錄
+        sanitized_stem: 檔案名稱 (已清理)
+        output_file: 輸出檔案路徑 (可選)
+    
+    Returns:
+        合併後的markdown內容
+    """
+    if not os.path.exists(checkpoint_dir):
+        print(f"❌ 檢查點目錄不存在: {checkpoint_dir}")
+        return None
+    
+    # 查找所有批次markdown檔案
+    batch_files = []
+    for filename in os.listdir(checkpoint_dir):
+        if filename.startswith(f"{sanitized_stem}_batch_") and filename.endswith(".md"):
+            # 提取批次號
+            try:
+                batch_num = int(filename.split("_batch_")[1].split("_")[0])
+                batch_files.append((batch_num, filename))
+            except (IndexError, ValueError):
+                continue
+    
+    if not batch_files:
+        print(f"❌ 在 {checkpoint_dir} 中找不到批次markdown檔案")
+        return None
+    
+    # 按批次號排序
+    batch_files.sort(key=lambda x: x[0])
+    
+    # 讀取並合併所有批次檔案
+    merged_content = []
+    total_batches = len(batch_files)
+    
+    print(f"🔄 找到 {total_batches} 個批次markdown檔案，開始合併...")
+    
+    for i, (batch_num, filename) in enumerate(batch_files):
+        file_path = os.path.join(checkpoint_dir, filename)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                # 移除檔案開頭的metadata部分，保留實際markdown內容
+                if "---\n\n" in content:
+                    actual_content = content.split("---\n\n", 1)[1]
+                else:
+                    actual_content = content
+                merged_content.append(actual_content)
+                print(f"✅ 已讀取批次 {batch_num}: {filename}")
+        except Exception as e:
+            print(f"⚠️ 讀取批次 {batch_num} 失敗: {e}")
+    
+    if merged_content:
+        # 合併所有內容
+        final_content = "\n\n---\n\n".join(merged_content)
+        
+        # 如果指定了輸出檔案，寫入檔案
+        if output_file:
+            try:
+                with open(output_file, "w", encoding="utf-8") as f:
+                    f.write(f"# 手動合併的PDF OCR結果\n\n")
+                    f.write(f"來源: {checkpoint_dir}\n")
+                    f.write(f"合併時間: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"總批次數: {total_batches}\n\n")
+                    f.write("---\n\n")
+                    f.write(final_content)
+                print(f"✅ 已儲存合併檔案: {output_file}")
+            except Exception as e:
+                print(f"❌ 儲存合併檔案失敗: {e}")
+        
+        print(f"🎉 成功合併 {total_batches} 個批次的markdown內容")
+        return final_content
+    else:
+        print("❌ 沒有成功讀取任何批次內容")
+        return None
+
 def save_checkpoint(data, filename, console_output=None):
     """Save data to a checkpoint file."""
     with open(filename, 'wb') as f:
@@ -1418,8 +1556,8 @@ def process_pdf_to_markdown(
         translated_markdown_pages = [] # Initialize list to store results
         for item in translation_generator:
             # Check if it's a progress string or actual content/error
-            # Simple check: assume non-empty strings starting with specific emojis are progress/status
-            if isinstance(item, str) and (item.startswith("🔁") or item.startswith("⚠️") or item.startswith("✅")):
+            # Simple check: assume non-empty strings starting with specific emojis or [翻譯] are progress/status
+            if isinstance(item, str) and (item.startswith("🔁") or item.startswith("⚠️") or item.startswith("✅") or "[翻譯]" in item or "📝" in item):
                  yield item # Forward progress/status string
             else:
                  # Assume it's translated content or an error marker page
@@ -1877,7 +2015,17 @@ def create_gradio_interface():
                         - **PDF OCR 檢查點**：儲存 PDF 的文字識別結果  
                         - **圖片 OCR 檢查點**：儲存圖片區塊的 OCR 結果  
                         - **Markdown 檢查點**：儲存已產出的 Markdown 檔案  
+                        - **批次 Markdown 備份**：每個 OCR 批次完成後自動儲存對應的 .md 檔案
+                        
                         可取消勾選「使用現有檢查點」重新處理，或手動刪除 `checkpoints/` 資料夾。
+                        
+                        **斷點續傳功能**：程式會自動偵測已完成的批次並跳過，從中斷點繼續處理。
+                        
+                        **手動恢復功能**：如果 pkl 檢查點損壞，可在 Python 中執行：
+                        ```python
+                        from mistralocr_app import merge_batch_markdown_files
+                        merge_batch_markdown_files("checkpoints_目錄", "檔案名", "輸出.md")
+                        ```
 
                         ## 輸出檔案
 
