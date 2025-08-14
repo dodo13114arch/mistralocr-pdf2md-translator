@@ -22,8 +22,6 @@ Todo list
 4. 使用 **Pixtral**, **Gemini**, 或 **OpenAI** 模型對圖片中的內容進行結構化 OCR (可選)。
 5. 匯出 Markdown 檔（原文版 + 翻譯版）與對應圖片。
 
-⚠ 注意： 本專案依賴於 httpx 和 uvicorn，這些套件目前尚未支援 h11 版本 0.16.0 或以上。雖然 h11 在 0.16.0 版本中修復了已知的安全性漏洞（CVE-2025-43859），但目前的依賴組合可能仍使用較舊的 h11 版本。使用者可自行調整依賴版本，但需自行承擔可能的風險。(2025,5,24 update) 
-
 ## 安裝需求
 
 1. 安裝必要的 Python 套件：
@@ -31,6 +29,7 @@ Todo list
 ```bash
 pip install -r requirements.txt
 ```
+- python 3.10.18 可正常運行
 
 2. 設定 API 金鑰：可以在虛擬環境中直接匯入環境變數，或建立 `.env` 檔案：
 
@@ -58,7 +57,7 @@ OPENAI_API_KEY=your_openai_api_key_here
 python mistralocr_app.py
 ```
 
-然後在瀏覽器中開啟顯示的網址（通常是 http://127.0.0.1:7860）。
+然後在瀏覽器中開啟顯示的網址（通常是 `http://127.0.0.1:7860` ）。
 
 ### 介面使用說明
 
