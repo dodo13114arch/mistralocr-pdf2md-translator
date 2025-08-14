@@ -50,11 +50,11 @@ except ImportError:
     print("⚠️ OpenAI library not found. Please install it: pip install openai")
     OpenAI = None # Set to None if import fails
 
-# PDF processing
+# PDF processing (migrate to pypdf to avoid PyPDF2 vulnerability)
 try:
-    from PyPDF2 import PdfReader, PdfWriter
+    from pypdf import PdfReader, PdfWriter
 except ImportError:
-    print("⚠️ PyPDF2 library not found. Please install it: pip install pypdf2")
+    print("⚠️ pypdf library not found. Please install it: pip install pypdf")
     PdfReader = None
     PdfWriter = None
 
@@ -93,7 +93,7 @@ def retry_with_backoff(func, retries=5, base_delay=1.5, linear=False):
 def get_pdf_page_count(pdf_path):
     """Get the total number of pages in a PDF file."""
     if not PdfReader:
-        raise ImportError("PyPDF2 not available for PDF page counting")
+        raise ImportError("pypdf not available for PDF page counting")
     
     try:
         with open(pdf_path, 'rb') as file:
@@ -106,7 +106,7 @@ def get_pdf_page_count(pdf_path):
 def split_pdf_by_pages(pdf_path, output_dir, pages_per_chunk=30):
     """Split a PDF into multiple smaller PDFs with specified pages per chunk."""
     if not PdfReader or not PdfWriter:
-        raise ImportError("PyPDF2 not available for PDF splitting")
+        raise ImportError("pypdf not available for PDF splitting")
     
     pdf_file = Path(pdf_path)
     filename_stem = pdf_file.stem.replace(" ", "_")  # Sanitize filename
