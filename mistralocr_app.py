@@ -68,14 +68,22 @@ class StructuredOCR(BaseModel):
 
 # ===== Utility Functions =====
 
-def retry_with_backoff(func, retries=5, base_delay=1.5):
+def retry_with_backoff(func, retries=5, base_delay=1.5, linear=False):
     """Retry a function with exponential backoff."""
     for attempt in range(retries):
         try:
             return func()
         except Exception as e:
-            if "429" in str(e):
-                wait_time = base_delay * (2 ** attempt)
+            # Retry on common rate/overload signals (e.g., Gemini OVERLOAD)
+            error_text = str(e).lower()
+            if (
+                "429" in error_text
+                or "overload" in error_text
+                or "rate limit" in error_text
+                or "resource has been exhausted" in error_text
+                or "quota" in error_text
+            ):
+                wait_time = base_delay * ((attempt + 1) if linear else (2 ** attempt))
                 print(f"⚠️ API rate limit hit. Retrying in {wait_time:.1f}s...")
                 time.sleep(wait_time)
             else:
@@ -285,15 +293,24 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
                     continue # Skip to next page
 
             elif model.startswith("gemini"):
-                # --- Gemini Translation Logic ---
+                # --- Gemini Translation Logic with auto-retry ---
                 print(f"    - Translating using Gemini model: {model}")
-                response = gemini_client.models.generate_content(
-                    model=model,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction
-                    ),
-                    contents=page
-                )
+                def _call_gemini():
+                    return gemini_client.models.generate_content(
+                        model=model,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_instruction
+                        ),
+                        contents=page
+                    )
+                try:
+                    response = retry_with_backoff(_call_gemini, retries=5, base_delay=3.0, linear=True)
+                except Exception as gemini_e:
+                    error_msg = f"⚠️ [翻譯] Gemini 翻譯第 {idx+1} / {total_pages} 頁失敗：{gemini_e}"
+                    print(error_msg)
+                    yield error_msg
+                    yield f"--- ERROR: Gemini Translation Failed for Page {idx+1} ---\n\n{page}"
+                    continue
                 translated_md = response.text.strip()
             
             elif model.startswith("mistral"):
