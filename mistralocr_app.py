@@ -26,6 +26,7 @@ import pickle
 import certifi
 import tempfile
 import shutil
+import re
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
 # Third-party libraries
@@ -158,6 +159,18 @@ def replace_images_in_markdown(markdown_str: str, images_dict: dict) -> str:
             f"![{img_name}]({img_name})", f"![{img_name}]({base64_str})"
         )
     return markdown_str
+
+def replace_any_image_links_with_base64(markdown_str: str, images_dict: dict) -> str:
+    """Replace any markdown image link with base64 if alt text matches image id.
+    This works even after links have been replaced to file paths.
+    """
+    pattern = re.compile(r"!\\[([^\\]]+)\\]\\(([^\\)]+)\\)")
+    def _sub(match):
+        alt = match.group(1)
+        if alt in images_dict:
+            return f"![{alt}]({images_dict[alt]})"
+        return match.group(0)
+    return pattern.sub(_sub, markdown_str)
 
 def get_combined_markdown(ocr_response: OCRResponse) -> str:
     """Combine OCR text and images into a single markdown document."""
@@ -1543,7 +1556,13 @@ def process_pdf_to_markdown(
         # Use the raw markdown text directly
         pages_after_ocr_insertion = [raw_md for raw_md, _ in raw_page_data]
 
-    # Step 3.6: Save images and replace links in the (potentially modified) markdown
+    # Step 3.6: Prepare UI markdown (inline base64) and also save images/replace links for files
+    # Build UI version first so preview can render images inside Gradio without static hosting
+    ui_markdown_pages = []
+    for page_idx, (md_for_ui, (_, images_dict)) in enumerate(zip(pages_after_ocr_insertion, raw_page_data)):
+        ui_markdown_pages.append(replace_images_in_markdown(md_for_ui, images_dict))
+
+    # Save images to disk and produce file-path version for persisted markdown
     final_markdown_pages = [] # This list will have final file paths as links
     # Use sanitized_stem for image folder name
     image_folder_name = os.path.join(output_dir, f"images_{sanitized_stem}") 
@@ -1589,6 +1608,18 @@ def process_pdf_to_markdown(
     final_markdown_original = "\n\n---\n\n".join(final_markdown_pages) # Use the final pages with links
     final_markdown_translated = "\n\n---\n\n".join(translated_markdown_pages) if translated_markdown_pages else None
 
+    # Build UI versions with inline images for proper rendering in Gradio preview
+    ui_final_markdown_original = "\n\n---\n\n".join(ui_markdown_pages)
+    if translated_markdown_pages:
+        ui_markdown_pages_translated = []
+        for page_idx, (translated_md, (_, images_dict)) in enumerate(zip(translated_markdown_pages, raw_page_data)):
+            ui_markdown_pages_translated.append(
+                replace_any_image_links_with_base64(translated_md, images_dict)
+            )
+        ui_final_markdown_translated = "\n\n---\n\n".join(ui_markdown_pages_translated)
+    else:
+        ui_final_markdown_translated = None
+
     # Step 6: Save files based on selection - Use sanitized_stem
     saved_files = {}
     if "英文原文" in output_formats_selected:
@@ -1632,8 +1663,9 @@ def process_pdf_to_markdown(
     # Return the final result dictionary for Gradio UI update
     yield {
         "saved_files": saved_files, # Dictionary of saved file paths
-        "translated_content": final_markdown_translated,
-        "original_content": final_markdown_original,
+        # Provide inline-base64 versions for UI preview, while files saved use disk paths
+        "translated_content": ui_final_markdown_translated,
+        "original_content": ui_final_markdown_original,
         "output_formats_selected": output_formats_selected # Pass back selections
     }
 
