@@ -291,13 +291,19 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
                         {"role": "system", "content": system_instruction},
                         {"role": "user", "content": page} 
                     ]
-                    
-                    response = openai_client.chat.completions.create(
-                        model=model,
-                        messages=messages,
-                        temperature=0.1 # Lower temperature for more deterministic translation
-                    )
-                    translated_md = response.choices[0].message.content.strip()
+
+                    def _call_openai():
+                        return openai_client.chat.completions.create(
+                            model=model,
+                            messages=messages,
+                            temperature=0.1 # Lower temperature for more deterministic translation
+                        )
+
+                    response = retry_with_backoff(_call_openai, retries=4, base_delay=2.0, linear=True)
+                    raw_msg = response.choices[0].message.content
+                    if not raw_msg:
+                        raise ValueError("OpenAI returned empty content")
+                    translated_md = raw_msg.strip()
                 except Exception as openai_e:
                     error_msg = f"⚠️ [翻譯] OpenAI 翻譯第 {idx+1} / {total_pages} 頁失敗：{openai_e}"
                     print(error_msg)
@@ -324,21 +330,39 @@ def translate_markdown_pages(pages, mistral_client, gemini_client, openai_client
                     yield error_msg
                     yield f"--- ERROR: Gemini Translation Failed for Page {idx+1} ---\n\n{page}"
                     continue
-                translated_md = response.text.strip()
+                raw_text = response.text
+                if (not raw_text) and getattr(response, "candidates", None):
+                    parts = getattr(response.candidates[0], "content", None)
+                    if parts and getattr(parts, "parts", None):
+                        # Concatenate any available text parts
+                        raw_text = "".join((p.text or "") for p in parts.parts)
+                if not raw_text:
+                    error_msg = f"⚠️ [翻譯] Gemini 回傳空內容，跳過第 {idx+1} 頁"
+                    print(error_msg)
+                    yield error_msg
+                    yield f"--- ERROR: Gemini Empty Response for Page {idx+1} ---\n\n{page}"
+                    continue
+                translated_md = raw_text.strip()
             
             elif model.startswith("mistral"):
                 # --- Mistral Translation Logic ---
                 print(f"    - Translating using Mistral model: {model}")
                 try:
-                    response = mistral_client.chat.complete(
-                        model=model,
-                        messages=[
-                            {"role": "system", "content": system_instruction},
-                            {"role": "user", "content": page}
-                        ],
-                        temperature=0.1
-                    )
-                    translated_md = response.choices[0].message.content.strip()
+                    def _call_mistral():
+                        return mistral_client.chat.complete(
+                            model=model,
+                            messages=[
+                                {"role": "system", "content": system_instruction},
+                                {"role": "user", "content": page}
+                            ],
+                            temperature=0.1
+                        )
+
+                    response = retry_with_backoff(_call_mistral, retries=4, base_delay=2.0, linear=True)
+                    raw_msg = response.choices[0].message.content
+                    if not raw_msg:
+                        raise ValueError("Mistral returned empty content")
+                    translated_md = raw_msg.strip()
                 except Exception as mistral_e:
                     error_msg = f"⚠️ [翻譯] Mistral 翻譯第 {idx+1} / {total_pages} 頁失敗：{mistral_e}"
                     print(error_msg)
@@ -1579,6 +1603,7 @@ def process_pdf_to_markdown(
     translated_markdown_pages = None # Initialize
     need_translation = "中文翻譯" in output_formats_selected
     translated_checkpoint = os.path.join(checkpoint_dir, f"{sanitized_stem}_translated_pages.pkl") if need_translation else None
+    checkpoint_every_pages = 5  # Save translation progress every N pages
     
     if need_translation:
         # Try to load existing translation checkpoint
@@ -1606,6 +1631,11 @@ def process_pdf_to_markdown(
                 else:
                      # Assume it's translated content or an error marker page
                      translated_markdown_pages.append(item)
+                     if translated_checkpoint and (len(translated_markdown_pages) % checkpoint_every_pages == 0):
+                         # Save incremental translation progress to avoid losing work on crashes
+                         save_msg = save_checkpoint(translated_markdown_pages, translated_checkpoint)
+                         if save_msg:
+                             yield save_msg
             
             # Save translation checkpoint
             save_msg = save_checkpoint(translated_markdown_pages, translated_checkpoint)
