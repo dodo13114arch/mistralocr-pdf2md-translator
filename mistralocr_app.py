@@ -164,7 +164,7 @@ def replace_any_image_links_with_base64(markdown_str: str, images_dict: dict) ->
     """Replace any markdown image link with base64 if alt text matches image id.
     This works even after links have been replaced to file paths.
     """
-    pattern = re.compile(r"!\\[([^\\]]+)\\]\\(([^\\)]+)\\)")
+    pattern = re.compile(r"!\[([^\]]+)\]\(([^\)]+)\)")
     def _sub(match):
         alt = match.group(1)
         if alt in images_dict:
@@ -1578,26 +1578,42 @@ def process_pdf_to_markdown(
     # Step 4: Translate the final markdown pages
     translated_markdown_pages = None # Initialize
     need_translation = "中文翻譯" in output_formats_selected
+    translated_checkpoint = os.path.join(checkpoint_dir, f"{sanitized_stem}_translated_pages.pkl") if need_translation else None
+    
     if need_translation:
-        # Translate the final list with correct image links, passing both clients
-        translation_generator = translate_markdown_pages(
-            final_markdown_pages, 
-            mistral_client,
-            gemini_client,
-            openai_client, # Pass openai_client
-            model=translation_model,
-            system_instruction=translation_system_prompt
-        )
-        # Collect yielded pages from the translation generator
-        translated_markdown_pages = [] # Initialize list to store results
-        for item in translation_generator:
-            # Check if it's a progress string or actual content/error
-            # Simple check: assume non-empty strings starting with specific emojis or [翻譯] are progress/status
-            if isinstance(item, str) and (item.startswith("🔁") or item.startswith("⚠️") or item.startswith("✅") or "[翻譯]" in item or "📝" in item):
-                 yield item # Forward progress/status string
-            else:
-                 # Assume it's translated content or an error marker page
-                 translated_markdown_pages.append(item)
+        # Try to load existing translation checkpoint
+        translated_markdown_pages, load_msg = load_checkpoint(translated_checkpoint) if use_existing_checkpoints else (None, None)
+        if load_msg:
+            yield load_msg
+        
+        if translated_markdown_pages is None:
+            # Translate the final list with correct image links, passing both clients
+            translation_generator = translate_markdown_pages(
+                final_markdown_pages, 
+                mistral_client,
+                gemini_client,
+                openai_client, # Pass openai_client
+                model=translation_model,
+                system_instruction=translation_system_prompt
+            )
+            # Collect yielded pages from the translation generator
+            translated_markdown_pages = [] # Initialize list to store results
+            for item in translation_generator:
+                # Check if it's a progress string or actual content/error
+                # Simple check: assume non-empty strings starting with specific emojis or [翻譯] are progress/status
+                if isinstance(item, str) and (item.startswith("🔁") or item.startswith("⚠️") or item.startswith("✅") or "[翻譯]" in item or "📝" in item):
+                     yield item # Forward progress/status string
+                else:
+                     # Assume it's translated content or an error marker page
+                     translated_markdown_pages.append(item)
+            
+            # Save translation checkpoint
+            save_msg = save_checkpoint(translated_markdown_pages, translated_checkpoint)
+            if save_msg:
+                yield save_msg
+        else:
+            yield "ℹ️ 使用現有翻譯檢查點。"
+            print("ℹ️ 使用現有翻譯檢查點。")
     else:
         yield "ℹ️ 跳過翻譯步驟 (未勾選中文翻譯)。"
         print("ℹ️ 跳過翻譯步驟 (未勾選中文翻譯)。")
