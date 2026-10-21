@@ -1833,13 +1833,14 @@ def create_gradio_interface():
 
         # --- Initial Log Messages ---
         # Print statements added within the block
-        # Use yield with gr.update() for intermediate console updates
+        # Use yield with gr.skip() so the markdown output is left unchanged
+        # while the console log streams (Gradio 6 removed the old gr.update() skip idiom).
         log_accumulator += f"🚀 開始處理 PDF: {pdf_path_obj.name}\n"
-        yield gr.update(), log_accumulator # Update only console
+        yield gr.skip(), log_accumulator # Update only console
         log_accumulator += f"📂 輸出目錄: {output_dir}\n"
-        yield gr.update(), log_accumulator # Update only console
+        yield gr.skip(), log_accumulator # Update only console
         log_accumulator += f"💾 檢查點目錄: {checkpoint_dir}\n"
-        yield gr.update(), log_accumulator # Update only console
+        yield gr.skip(), log_accumulator # Update only console
 
         # Determine if translation is needed based on CheckboxGroup selection
         # The 'translate' checkbox is now less relevant, primary control is output_formats_selected
@@ -1847,11 +1848,11 @@ def create_gradio_interface():
             output_formats_selected = ["英文原文"]
         need_translation_for_processing = ("中文翻譯" in output_formats_selected) and not ocr_only
         log_accumulator += "✅ 將產生中文翻譯\n" if need_translation_for_processing else "ℹ️ 不產生中文翻譯 (未勾選)\n"
-        yield gr.update(), log_accumulator # Update only console
+        yield gr.skip(), log_accumulator # Update only console
 
         image_description_style = "plain" if image_description_style == "純文字" else "json"
         log_accumulator += "✅ 使用現有檢查點（如果存在）\n" if use_existing_checkpoints else "🔄 重新處理所有步驟（不使用現有檢查點）\n"
-        yield gr.update(), log_accumulator # Update only console
+        yield gr.skip(), log_accumulator # Update only console
         print(f"需要翻譯: {need_translation_for_processing}, 使用檢查點: {use_existing_checkpoints}") # Console print
 
         # --- Main Processing ---
@@ -1883,9 +1884,9 @@ def create_gradio_interface():
                     result_data = item
                     # Don't yield the dict itself to the console
                 elif isinstance(item, str):
-                    # Append and yield intermediate logs using gr.update()
+                    # Append and yield intermediate logs using gr.skip()
                     log_accumulator += f"{item}\n"
-                    yield gr.update(), log_accumulator # Update only console
+                    yield gr.skip(), log_accumulator # Update only console
                 # Handle potential other types if necessary, otherwise ignore
 
             # --- Process Final Result for UI ---
@@ -2132,9 +2133,9 @@ def create_gradio_interface():
 
                 
 
-        # Define outputs for the click event
-        # The order matches how Gradio handles generators:
-        # Last yield goes to the first output, intermediate yields go to the second.
+        # Define outputs for the click event.
+        # Intermediate yields use gr.skip() for the markdown pane and a string
+        # for the log pane; the final yield updates both.
         outputs_list = [output, console_output]
 
         # Define inputs for the click event (remove console_output)
